@@ -1,8 +1,9 @@
+#include "../include/tracker.h"
 #include "../include/sync.h"
 #include <iostream>
 #include <string>
 #include <vector>
-#include <unistd.h>    // read, close, sleep
+#include <unistd.h>    // sleep
 #include <fcntl.h>     // open
 #include <cstring>     // strtok, strlen
 #include <cstdlib>     // atoi
@@ -63,8 +64,22 @@ int main(int argc, char* argv[]) {
               << " running at " << myIP << ":" << myPort
               << ", peer at " << peerIP << ":" << peerPort << "\n";
 
-    TrackerSync sync(myPort, peerIP, peerPort);
-    sync.start();
+    int syncPort      = myPort + 1000;     // my sync port
+    int peerSyncPort  = peerPort + 1000;   // peer sync port
+
+    // ---- Start client listener ----
+    Tracker tracker(myIP, myPort, peerIP, peerPort);
+
+// ---- Start sync with peer tracker ----
+
+    // TrackerSync sync(syncPort, peerIP, peerSyncPort, tracker, tracker.getSystemState());
+    // sync.start();
+
+    tracker.startSync();
+
+    if (tracker.getRole() == Tracker::PRIMARY) {
+        tracker.start();
+    }
 
     // Keep alive
     while (true) {

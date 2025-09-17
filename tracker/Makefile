@@ -4,7 +4,7 @@ SRC_DIR = src
 INC_DIR = include
 COMMON_DIR = ../common/src
 
-OBJS = $(SRC_DIR)/main.o $(SRC_DIR)/tracker.o $(SRC_DIR)/sync.o $(SRC_DIR)/utils.o \
+OBJS = $(SRC_DIR)/main.o $(SRC_DIR)/tracker.o $(SRC_DIR)/sync.o $(SRC_DIR)/utils.o $(SRC_DIR)/SystemState.o \
        $(COMMON_DIR)/protocol.o $(COMMON_DIR)/sha1.o $(COMMON_DIR)/logger.o
 
 TARGET = tracker
