@@ -4,6 +4,7 @@
 #include <sstream>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <csignal> 
 #include <cstring>
 
 Tracker::Tracker(std::string ip, int port, std::string peerIP, int peerPort)
@@ -73,6 +74,8 @@ void Tracker::start() {
 
     running.store(true);
     listenerThread = std::thread(&Tracker::listenForClients, this);
+
+    consoleThread = std::thread(&Tracker::consoleLoop, this);
 }
 
 void Tracker::stop() {
@@ -392,5 +395,19 @@ std::string Tracker::processCommand(const std::string &cmd, int clientSock) {
     else {
         // Unknown command
         return std::string(PROTO_ERR) + " " + std::to_string(ERR_INTERNAL) + " Unknown command: " + action;
+    }
+}
+
+void Tracker::consoleLoop() {
+    std::string line;
+    while (running.load()) {
+        if (!std::getline(std::cin, line)) break;
+
+        if (line == "quit" || line == "exit") {
+            std::cout << "[TRACKER] Quitting\n";
+            std::raise(SIGINT);   // 🔹 send SIGINT → behaves like Ctrl+C
+        } else {
+            std::cout << "[TRACKER] Unknown console command: " << line << std::endl;
+        }
     }
 }

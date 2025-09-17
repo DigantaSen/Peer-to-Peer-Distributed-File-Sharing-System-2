@@ -42,6 +42,9 @@ private:
     void handleClient(int clientSock);
     void listenForClients();
 
+    std::thread consoleThread;
+    void consoleLoop();
+
 public:
     Tracker(std::string ip, int port, std::string peerIP, int peerPort);
     ~Tracker();
