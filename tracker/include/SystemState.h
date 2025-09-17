@@ -22,6 +22,7 @@ struct Group {
     std::string ownerId;
     std::set<std::string> members;
     std::set<std::string> pendingRequests;
+    std::vector<std::string> memberOrder; 
 };
 
 struct FileMetadata {
@@ -36,6 +37,11 @@ public:
     bool loginUser(const std::string &userId, const std::string &password, std::string &errMsg);
     bool createGroup(const std::string &gid, const std::string &owner, std::string &errMsg);
     std::vector<std::string> listGroups();
+    bool joinGroup(const std::string &gid, const std::string &userId, std::string &errMsg);
+    std::vector<std::string> listRequests(const std::string &gid, const std::string &owner, std::string &errMsg);
+    bool acceptRequest(const std::string &gid, const std::string &owner, const std::string &userId, std::string &errMsg);
+    bool leaveGroup(const std::string &gid, const std::string &userId, std::string &errMsg);
+    bool logoutUser(const std::string &userId, std::string &errMsg);
 
     std::map<std::string, User> users;
     std::map<std::string, Group> groups;

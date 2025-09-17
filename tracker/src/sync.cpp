@@ -6,6 +6,7 @@
 #include <sstream>
 #include <arpa/inet.h>
 #include <cstring>
+#include <algorithm>
 using namespace std;
 
 
@@ -139,6 +140,9 @@ std::string TrackerSync::serializeSystemState() {
         for (auto &r : grp.pendingRequests) {
             out += "REQUEST " + grp.groupId + " " + r + "\n";
         }
+        for (auto &ord : grp.memberOrder) {
+            out += "ORDER " + grp.groupId + " " + ord + "\n";
+        }
     }
 
     // Files
@@ -214,6 +218,12 @@ void TrackerSync::deserializeSystemState(const std::string &data) {
             ls >> gid >> fname >> peer;
             systemState.groupFiles[gid][fname].peers.insert(peer);
         }
+        else if (type == "ORDER") {
+            std::string gid, user;
+            ls >> gid >> user;
+            systemState.groups[gid].memberOrder.push_back(user);
+        }
+
     }
 }
 
@@ -236,15 +246,32 @@ void TrackerSync::applyUpdate(const std::string &update) {
         g.groupId = arg1;   // groupId
         g.ownerId = arg2;   // owner
         g.members.insert(arg2);
+        g.memberOrder.push_back(arg2);  // owner is first
         systemState.groups[g.groupId] = g;
     }
     else if (t == "JOIN_REQUEST") {
         systemState.groups[arg1].pendingRequests.insert(arg2);
-    } 
+    }
     else if (t == "JOIN_ACCEPT") {
         systemState.groups[arg1].members.insert(arg2);
         systemState.groups[arg1].pendingRequests.erase(arg2);
-    } 
+        systemState.groups[arg1].memberOrder.push_back(arg2); // preserve join order
+    }
+    else if (t == "LEAVE_GROUP") {
+        auto &grp = systemState.groups[arg1];
+        std::string user = arg2;
+
+        if (grp.ownerId == user) {
+            // ownership transfer will already have been handled by primary’s state
+            // just replicate
+            grp.ownerId = ""; // backup will be corrected by full sync or explicit update
+        }
+        grp.members.erase(user);
+        grp.memberOrder.erase(
+            std::remove(grp.memberOrder.begin(), grp.memberOrder.end(), user),
+            grp.memberOrder.end()
+        );
+    }
     else if (t == "UPLOAD_FILE") {
         FileMetadata fm;
         fm.fileName = arg2;

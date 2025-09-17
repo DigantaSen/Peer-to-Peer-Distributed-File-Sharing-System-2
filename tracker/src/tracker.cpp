@@ -234,7 +234,7 @@ std::string Tracker::processCommand(const std::string &cmd, int clientSock) {
 
         return std::string(PROTO_OK) + " Group created: " + gid;
     }
-    else if (action == "list_groups") {
+    else if (action == CMD_LIST_GROUPS) {
         std::string user;
         {
             std::lock_guard<std::mutex> lock(sessionMutex);
@@ -255,6 +255,138 @@ std::string Tracker::processCommand(const std::string &cmd, int clientSock) {
         }
 
         return result;
+    }
+    else if (action == CMD_JOIN_GROUP) {
+        std::string gid;
+        iss >> gid;
+        if (gid.empty()) {
+            return std::string(PROTO_ERR) + " Missing group_id";
+        }
+
+        std::string user;
+        {
+            std::lock_guard<std::mutex> lock(sessionMutex);
+            if (!sessions[clientSock].loggedIn) {
+                return std::string(PROTO_ERR) + " Must be logged in";
+            }
+            user = sessions[clientSock].userId;
+        }
+
+        std::string errMsg;
+        if (!systemState.joinGroup(gid, user, errMsg)) {
+            return std::string(PROTO_ERR) + " " + errMsg;
+        }
+
+        // sync with backup
+        sync.sendUpdate("JOIN_GROUP " + gid + " " + user);
+
+        return std::string(PROTO_OK) + " Join request sent for group " + gid;
+    }
+    else if (action == CMD_LIST_REQUESTS) {
+        std::string gid;
+        iss >> gid;
+        if (gid.empty()) {
+            return std::string(PROTO_ERR) + " Missing group_id";
+        }
+
+        std::string user;
+        {
+            std::lock_guard<std::mutex> lock(sessionMutex);
+            if (!sessions[clientSock].loggedIn) {
+                return std::string(PROTO_ERR) + " Must be logged in";
+            }
+            user = sessions[clientSock].userId;
+        }
+
+        std::string errMsg;
+        auto reqs = systemState.listRequests(gid, user, errMsg);
+        if (!errMsg.empty()) {
+            return std::string(PROTO_ERR) + " " + errMsg;
+        }
+
+        if (reqs.empty()) {
+            return std::string(PROTO_OK) + " No pending requests for group " + gid;
+        }
+
+        std::string result = std::string(PROTO_OK) + " Pending requests for group " + gid + ":\n";
+        for (auto &u : reqs) {
+            result += " - " + u + "\n";
+        }
+
+        return result;
+    }
+    else if (action == CMD_ACCEPT_REQUEST) {
+        std::string gid, targetUser;
+        iss >> gid >> targetUser;
+        if (gid.empty() || targetUser.empty()) {
+            return std::string(PROTO_ERR) + " Missing arguments: accept_request <group_id> <user_id>";
+        }
+
+        std::string owner;
+        {
+            std::lock_guard<std::mutex> lock(sessionMutex);
+            if (!sessions[clientSock].loggedIn) {
+                return std::string(PROTO_ERR) + " Must be logged in";
+            }
+            owner = sessions[clientSock].userId;
+        }
+
+        std::string errMsg;
+        if (!systemState.acceptRequest(gid, owner, targetUser, errMsg)) {
+            return std::string(PROTO_ERR) + " " + errMsg;
+        }
+
+        // replicate state
+        sync.sendUpdate("ACCEPT_REQUEST " + gid + " " + owner + " " + targetUser);
+
+        return std::string(PROTO_OK) + " User " + targetUser + " added to group " + gid;
+    }
+    else if (action == CMD_LEAVE_GROUP) {
+        std::string gid;
+        iss >> gid;
+        if (gid.empty()) {
+            return std::string(PROTO_ERR) + " Missing group_id";
+        }
+
+        std::string user;
+        {
+            std::lock_guard<std::mutex> lock(sessionMutex);
+            if (!sessions[clientSock].loggedIn) {
+                return std::string(PROTO_ERR) + " Must be logged in";
+            }
+            user = sessions[clientSock].userId;
+        }
+
+        std::string errMsg;
+        if (!systemState.leaveGroup(gid, user, errMsg)) {
+            return std::string(PROTO_ERR) + " " + errMsg;
+        }
+
+        sync.sendUpdate("LEAVE_GROUP " + gid + " " + user);
+
+        return std::string(PROTO_OK) + " " + user + " left group " + gid;
+    }
+    else if (action == CMD_LOGOUT) {
+        std::string user;
+        {
+            std::lock_guard<std::mutex> lock(sessionMutex);
+            auto sit = sessions.find(clientSock);
+            if (sit == sessions.end() || !sit->second.loggedIn) {
+                return std::string(PROTO_ERR) + " No active login session";
+            }
+            user = sit->second.userId;
+            sit->second.loggedIn = false;   // clear session
+            sit->second.userId = "";
+        }
+
+        std::string errMsg;
+        if (!systemState.logoutUser(user, errMsg)) {
+            return std::string(PROTO_ERR) + " " + errMsg;
+        }
+
+        sync.sendUpdate("LOGOUT " + user);
+
+        return std::string(PROTO_OK) + " Logged out " + user;
     }
 
     else {

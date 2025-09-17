@@ -40,6 +40,13 @@ int handleCommand(Client &client, const std::string &input) {
     else if (cmd == CMD_LIST_GROUPS) {
         client.sendMessage(std::string(CMD_LIST_GROUPS));
     }
+    else if (cmd == CMD_JOIN_GROUP) {
+        if (args.empty()) {
+            std::cerr << "Usage: join_group <group_id>\n";
+            return -1;
+        }
+        client.sendMessage(std::string(CMD_JOIN_GROUP) + " " + args[0]);
+    }
 
     else if (cmd == CMD_UPLOAD_FILE) {
         if (args.size() < 2) {
@@ -48,6 +55,31 @@ int handleCommand(Client &client, const std::string &input) {
         }
         client.sendMessage(std::string(CMD_UPLOAD_FILE) + " " + args[0] + " " + args[1]);
     }
+    else if (cmd == CMD_LIST_REQUESTS) {
+        if (args.empty()) {
+            std::cerr << "Usage: list_requests <group_id>\n";
+            return -1;
+        }
+        client.sendMessage(std::string(CMD_LIST_REQUESTS) + " " + args[0]);
+    }
+    else if (cmd == CMD_ACCEPT_REQUEST) {
+        if (args.size() < 2) {
+            std::cerr << "Usage: accept_request <group_id> <user_id>\n";
+            return -1;
+        }
+        client.sendMessage(std::string(CMD_ACCEPT_REQUEST) + " " + args[0] + " " + args[1]);
+    }
+    else if (cmd == CMD_LEAVE_GROUP) {
+        if (args.empty()) {
+            std::cerr << "Usage: leave_group <group_id>\n";
+            return -1;
+        }
+        client.sendMessage(std::string(CMD_LEAVE_GROUP) + " " + args[0]);
+    }
+    else if (cmd == CMD_LOGOUT) {
+        client.sendMessage(std::string(CMD_LOGOUT));
+    }
+
     else if (cmd == CMD_EXIT) {
         std::cout << "[CLIENT] Exiting...\n";
         return 1;  // 🔹 signal main loop to exit
