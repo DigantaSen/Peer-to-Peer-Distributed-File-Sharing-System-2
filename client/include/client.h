@@ -2,24 +2,25 @@
 #define CLIENT_H
 
 #include <string>
+using namespace std;
 
 class Client {
 private:
     int sock;
-    std::string trackerIP;
+    string trackerIP;
     int trackerPort;
-    std::string recvBuf;
+    string recvBuf;
 
 public:
-    Client(std::string ip, int port);
+    Client(string ip, int port);
 
     bool connectToTracker(bool quiet = false);
     void disconnect();
 
     bool isConnected() const;
 
-    bool sendMessage(const std::string &msg);
-    std::string receiveMessage();
+    bool sendMessage(const string &msg);
+    string receiveMessage();
 };
 
 #endif 

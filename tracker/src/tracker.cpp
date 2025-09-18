@@ -6,19 +6,11 @@
 #include <arpa/inet.h>
 #include <csignal> 
 #include <cstring>
+using namespace std;
 
-Tracker::Tracker(std::string ip, int port, std::string peerIP, int peerPort)
-    : myIP(ip),
-      myPort(port),
-      peerIP(peerIP),
-      peerPort(peerPort),
-      server_fd(-1),
-      role(BACKUP),
-      sync(port + 100, peerIP, peerPort + 100, *this, systemState)  // pass state too
-{}
+Tracker::Tracker(string ip, int port, string peerIP, int peerPort) : myIP(ip), myPort(port), peerIP(peerIP), peerPort(peerPort), server_fd(-1), role(BACKUP), sync(port + 100, peerIP, peerPort + 100, *this, systemState) {}
 
 void Tracker::startSync() {
-    // call start() on the internal TrackerSync member so only one sync exists
     sync.start();
 }
 
@@ -28,7 +20,7 @@ Tracker::~Tracker() {
 
 void Tracker::setRole(Role r) {
     role = r;
-    std::cout << "[TRACKER] Role set to " << (role == PRIMARY ? "PRIMARY" : "BACKUP") << "\n";
+    cout << "[TRACKER] Role set to " << (role == PRIMARY ? "PRIMARY" : "BACKUP") << "\n";
 }
 
 Tracker::Role Tracker::getRole() const { return role; }
@@ -70,82 +62,82 @@ void Tracker::start() {
         return;
     }
 
-    std::cout << "[TRACKER] Listening for clients on port " << myPort << "\n";
+    cout << "[TRACKER] Listening for clients on port " << myPort << "\n";
 
     running.store(true);
-    listenerThread = std::thread(&Tracker::listenForClients, this);
+    listenerThread = thread(&Tracker::listenForClients, this);
 
-    consoleThread = std::thread(&Tracker::consoleLoop, this);
+    consoleThread = thread(&Tracker::consoleLoop, this);
 }
 
 void Tracker::stop() {
-    running.store(false);                     // 🔹 NEW
+    running.store(false);
 
     if (server_fd >= 0) {
-        shutdown(server_fd, SHUT_RDWR);       // 🔹 NEW: unblock accept()
+        shutdown(server_fd, SHUT_RDWR);
         close(server_fd);
         server_fd = -1;
     }
 
-    if (listenerThread.joinable()) {          // 🔹 NEW
-        listenerThread.join();                // 🔹 NEW: wait for clean exit
+    if (listenerThread.joinable()) {
+        listenerThread.join();
     }
 }
 
 void Tracker::listenForClients() {
-    while (running.load()) {                  // 🔹 CHANGE: stop loop when shutting down
+    while (running.load()) {
         int clientSock = accept(server_fd, nullptr, nullptr);
         if (clientSock < 0) {
-            if (!running.load()) break;       // 🔹 NEW: exit cleanly on stop()
-            if (errno == EINTR) continue;     // 🔹 NEW: retry on EINTR
+            if (!running.load()) break;
+            if (errno == EINTR) continue;
             perror("[TRACKER] Accept failed");
-            std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 🔹 NEW: avoid spin
+            this_thread::sleep_for(chrono::milliseconds(100));
             continue;
         }
 
         try {
-            std::thread(&Tracker::handleClient, this, clientSock).detach();
+            thread(&Tracker::handleClient, this, clientSock).detach();
         } catch (...) {
-            close(clientSock);                // 🔹 NEW: avoid leak if thread creation fails
+            close(clientSock);
         }
     }
 }
 
 void Tracker::handleClient(int clientSock) {
     {
-        std::lock_guard<std::mutex> lock(sessionMutex);
-        sessions[clientSock] = ClientSession();   // 🔹 NEW
+        lock_guard<mutex> lock(sessionMutex);
+        sessions[clientSock] = ClientSession();
     }
     char buffer[4096];
-    while (running.load()) {                  // 🔹 CHANGE: exit if shutting down
+    while (running.load()) {
         ssize_t bytes = recv(clientSock, buffer, sizeof(buffer) - 1, 0);
         if (bytes > 0) {
-            std::string msg(buffer, static_cast<size_t>(bytes));
+            string msg(buffer, static_cast<size_t>(bytes));
             
 
             while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r')) {
                 msg.pop_back();
             }
-            std::cout << "[TRACKER] Received raw: [" << msg << "]\n";
+            cout << "[TRACKER] Received raw: [" << msg << "]\n";
 
-            std::string response;
+            string response;
             if (msg == "WHOAREYOU") {
                 response = (role == PRIMARY ? "ROLE PRIMARY" : "ROLE BACKUP");
             } else {
                 response = processCommand(msg, clientSock);
-                std::cout<<"Hiiiii"<<role<<"pppp\n";
+                // cout<<"Hiiiii"<<role<<"pppp\n";
             }
 
             response += "\n";
 
-            const char *ptr = response.c_str();        // 🔹 NEW robust send loop
+            const char *ptr = response.c_str();
             size_t toSend = response.size();
             while (toSend > 0) {
                 ssize_t sent = send(clientSock, ptr, toSend, 0);
                 if (sent < 0) {
-                    if (errno == EINTR) continue;      // 🔹 retry on EINTR
+                    if (errno == EINTR) continue;
                     perror("[TRACKER] Send failed");
-                    close(clientSock);                 // 🔹 ensure no leak
+                    close(clientSock);
                     return;
                 }
                 ptr += sent;
@@ -153,106 +145,106 @@ void Tracker::handleClient(int clientSock) {
             }
         }
         else if (bytes == 0) {
-            std::cout << "[TRACKER] Client disconnected\n";
+            cout << "[TRACKER] Client disconnected\n";
             break;
         }
         else {
-            if (errno == EINTR) continue;              // 🔹 retry
+            if (errno == EINTR) continue;
             perror("[TRACKER] Recv failed");
             break;
         }
     }
     {
-        std::lock_guard<std::mutex> lock(sessionMutex);
-        sessions.erase(clientSock);   // 🔹 NEW
+        lock_guard<mutex> lock(sessionMutex);
+        sessions.erase(clientSock);
     }
-    close(clientSock);                                 // 🔹 already present, keep
+    close(clientSock);
 }
 
-std::string Tracker::processCommand(const std::string &cmd, int clientSock) {
-    // Split command into tokens (basic parsing)
-    std::istringstream iss(cmd);
-    std::string action;
+string Tracker::processCommand(const string &cmd, int clientSock) {
+
+    istringstream iss(cmd);
+    string action;
     iss >> action;
 
     if (action == CMD_CREATE_USER) {
-        std::string user, pass;
+        string user, pass;
         iss >> user >> pass;
         if (user.empty() || pass.empty()) {
-            return std::string(PROTO_ERR) + " " + std::to_string(ERR_INTERNAL) + " Missing arguments";
+            return string(PROTO_ERR) + " " + to_string(ERR_INTERNAL) + " Missing arguments";
         }
 
-        std::string errMsg;
+        string errMsg;
         if (!systemState.createUser(user, pass, errMsg)) {
-            return std::string(PROTO_ERR) + " " + std::to_string(ERR_INTERNAL) + " " + errMsg;
+            return string(PROTO_ERR) + " " + to_string(ERR_INTERNAL) + " " + errMsg;
         }
 
-        sync.sendUpdate(std::string("CREATE_USER ") + user + " " + pass);
-        printf("kjjs");
+        sync.sendUpdate(string("CREATE_USER ") + user + " " + pass);
+        // printf("kjjs");
 
-        return std::string(PROTO_OK) + " User created: " + user;
+        return string(PROTO_OK) + " User created: " + user;
     }
     else if (action == CMD_LOGIN) {
-        std::string user, pass;
+        string user, pass;
         iss >> user >> pass;
         if (user.empty() || pass.empty()) {
-            return std::string(PROTO_ERR) + " Missing arguments";
+            return string(PROTO_ERR) + " Missing arguments";
         }
 
-        std::string errMsg;
+        string errMsg;
         if (!systemState.loginUser(user, pass, errMsg)) {
-            return std::string(PROTO_ERR) + " " + errMsg;
+            return string(PROTO_ERR) + " " + errMsg;
         }
 
         {
-            std::lock_guard<std::mutex> lock(sessionMutex);
+            lock_guard<mutex> lock(sessionMutex);
             sessions[clientSock].userId = user;
             sessions[clientSock].loggedIn = true;
         }
 
-        return std::string(PROTO_OK) + " Logged in as " + user;
+        return string(PROTO_OK) + " Logged in as " + user;
     }
     else if (action == CMD_CREATE_GROUP) {
-        std::string gid;
+        string gid;
         iss >> gid;
         if (gid.empty()) {
-            return std::string(PROTO_ERR) + " Missing group_id";
+            return string(PROTO_ERR) + " Missing group_id";
         }
 
-        std::string owner;
+        string owner;
         {
-            std::lock_guard<std::mutex> lock(sessionMutex);
+            lock_guard<mutex> lock(sessionMutex);
             if (!sessions[clientSock].loggedIn) {
-                return std::string(PROTO_ERR) + " Must be logged in";
+                return string(PROTO_ERR) + " Must be logged in";
             }
             owner = sessions[clientSock].userId;
         }
 
-        std::string errMsg;
+        string errMsg;
         if (!systemState.createGroup(gid, owner, errMsg)) {
-            return std::string(PROTO_ERR) + " " + errMsg;
+            return string(PROTO_ERR) + " " + errMsg;
         }
 
         sync.sendUpdate("GROUP_CREATE " + gid + " " + owner);
 
-        return std::string(PROTO_OK) + " Group created: " + gid;
+        return string(PROTO_OK) + " Group created: " + gid;
     }
     else if (action == CMD_LIST_GROUPS) {
-        std::string user;
+        string user;
         {
-            std::lock_guard<std::mutex> lock(sessionMutex);
+            lock_guard<mutex> lock(sessionMutex);
             if (!sessions[clientSock].loggedIn) {
-                return std::string(PROTO_ERR) + " Must be logged in";
+                return string(PROTO_ERR) + " Must be logged in";
             }
             user = sessions[clientSock].userId;
         }
 
         auto allGroups = systemState.listGroups();
         if (allGroups.empty()) {
-            return std::string(PROTO_OK) + " No groups available";
+            return string(PROTO_OK) + " No groups available";
         }
 
-        std::string result = std::string(PROTO_OK) + " Groups:\n";
+        string result = string(PROTO_OK) + " Groups:\n";
         for (auto &g : allGroups) {
             result += " - " + g + "\n";
         }
@@ -260,58 +252,57 @@ std::string Tracker::processCommand(const std::string &cmd, int clientSock) {
         return result;
     }
     else if (action == CMD_JOIN_GROUP) {
-        std::string gid;
+        string gid;
         iss >> gid;
         if (gid.empty()) {
-            return std::string(PROTO_ERR) + " Missing group_id";
+            return string(PROTO_ERR) + " Missing group_id";
         }
 
-        std::string user;
+        string user;
         {
-            std::lock_guard<std::mutex> lock(sessionMutex);
+            lock_guard<mutex> lock(sessionMutex);
             if (!sessions[clientSock].loggedIn) {
-                return std::string(PROTO_ERR) + " Must be logged in";
+                return string(PROTO_ERR) + " Must be logged in";
             }
             user = sessions[clientSock].userId;
         }
 
-        std::string errMsg;
+        string errMsg;
         if (!systemState.joinGroup(gid, user, errMsg)) {
-            return std::string(PROTO_ERR) + " " + errMsg;
+            return string(PROTO_ERR) + " " + errMsg;
         }
 
-        // sync with backup
         sync.sendUpdate("JOIN_GROUP " + gid + " " + user);
 
-        return std::string(PROTO_OK) + " Join request sent for group " + gid;
+        return string(PROTO_OK) + " Join request sent for group " + gid;
     }
     else if (action == CMD_LIST_REQUESTS) {
-        std::string gid;
+        string gid;
         iss >> gid;
         if (gid.empty()) {
-            return std::string(PROTO_ERR) + " Missing group_id";
+            return string(PROTO_ERR) + " Missing group_id";
         }
 
-        std::string user;
+        string user;
         {
-            std::lock_guard<std::mutex> lock(sessionMutex);
+            lock_guard<mutex> lock(sessionMutex);
             if (!sessions[clientSock].loggedIn) {
-                return std::string(PROTO_ERR) + " Must be logged in";
+                return string(PROTO_ERR) + " Must be logged in";
             }
             user = sessions[clientSock].userId;
         }
 
-        std::string errMsg;
+        string errMsg;
         auto reqs = systemState.listRequests(gid, user, errMsg);
         if (!errMsg.empty()) {
-            return std::string(PROTO_ERR) + " " + errMsg;
+            return string(PROTO_ERR) + " " + errMsg;
         }
 
         if (reqs.empty()) {
-            return std::string(PROTO_OK) + " No pending requests for group " + gid;
+            return string(PROTO_OK) + " No pending requests for group " + gid;
         }
 
-        std::string result = std::string(PROTO_OK) + " Pending requests for group " + gid + ":\n";
+        string result = string(PROTO_OK) + " Pending requests for group " + gid + ":\n";
         for (auto &u : reqs) {
             result += " - " + u + "\n";
         }
@@ -319,95 +310,93 @@ std::string Tracker::processCommand(const std::string &cmd, int clientSock) {
         return result;
     }
     else if (action == CMD_ACCEPT_REQUEST) {
-        std::string gid, targetUser;
+        string gid, targetUser;
         iss >> gid >> targetUser;
         if (gid.empty() || targetUser.empty()) {
-            return std::string(PROTO_ERR) + " Missing arguments: accept_request <group_id> <user_id>";
+            return string(PROTO_ERR) + " Missing arguments: accept_request <group_id> <user_id>";
         }
 
-        std::string owner;
+        string owner;
         {
-            std::lock_guard<std::mutex> lock(sessionMutex);
+            lock_guard<mutex> lock(sessionMutex);
             if (!sessions[clientSock].loggedIn) {
-                return std::string(PROTO_ERR) + " Must be logged in";
+                return string(PROTO_ERR) + " Must be logged in";
             }
             owner = sessions[clientSock].userId;
         }
 
-        std::string errMsg;
+        string errMsg;
         if (!systemState.acceptRequest(gid, owner, targetUser, errMsg)) {
-            return std::string(PROTO_ERR) + " " + errMsg;
+            return string(PROTO_ERR) + " " + errMsg;
         }
 
-        // replicate state
         sync.sendUpdate("ACCEPT_REQUEST " + gid + " " + owner + " " + targetUser);
 
-        return std::string(PROTO_OK) + " User " + targetUser + " added to group " + gid;
+        return string(PROTO_OK) + " User " + targetUser + " added to group " + gid;
     }
     else if (action == CMD_LEAVE_GROUP) {
-        std::string gid;
+        string gid;
         iss >> gid;
         if (gid.empty()) {
-            return std::string(PROTO_ERR) + " Missing group_id";
+            return string(PROTO_ERR) + " Missing group_id";
         }
 
-        std::string user;
+        string user;
         {
-            std::lock_guard<std::mutex> lock(sessionMutex);
+            lock_guard<mutex> lock(sessionMutex);
             if (!sessions[clientSock].loggedIn) {
-                return std::string(PROTO_ERR) + " Must be logged in";
+                return string(PROTO_ERR) + " Must be logged in";
             }
             user = sessions[clientSock].userId;
         }
 
-        std::string errMsg;
+        string errMsg;
         if (!systemState.leaveGroup(gid, user, errMsg)) {
-            return std::string(PROTO_ERR) + " " + errMsg;
+            return string(PROTO_ERR) + " " + errMsg;
         }
 
         sync.sendUpdate("LEAVE_GROUP " + gid + " " + user);
 
-        return std::string(PROTO_OK) + " " + user + " left group " + gid;
+        return string(PROTO_OK) + " " + user + " left group " + gid;
     }
     else if (action == CMD_LOGOUT) {
-        std::string user;
+        string user;
         {
-            std::lock_guard<std::mutex> lock(sessionMutex);
+            lock_guard<mutex> lock(sessionMutex);
             auto sit = sessions.find(clientSock);
             if (sit == sessions.end() || !sit->second.loggedIn) {
-                return std::string(PROTO_ERR) + " No active login session";
+                return string(PROTO_ERR) + " No active login session";
             }
             user = sit->second.userId;
-            sit->second.loggedIn = false;   // clear session
+            sit->second.loggedIn = false;
             sit->second.userId = "";
         }
 
-        std::string errMsg;
+        string errMsg;
         if (!systemState.logoutUser(user, errMsg)) {
-            return std::string(PROTO_ERR) + " " + errMsg;
+            return string(PROTO_ERR) + " " + errMsg;
         }
 
         sync.sendUpdate("LOGOUT " + user);
 
-        return std::string(PROTO_OK) + " Logged out " + user;
+        return string(PROTO_OK) + " Logged out " + user;
     }
 
     else {
-        // Unknown command
-        return std::string(PROTO_ERR) + " " + std::to_string(ERR_INTERNAL) + " Unknown command: " + action;
+        return string(PROTO_ERR) + " " + to_string(ERR_INTERNAL) + " Unknown command: " + action;
     }
 }
 
 void Tracker::consoleLoop() {
-    std::string line;
+    string line;
     while (running.load()) {
-        if (!std::getline(std::cin, line)) break;
+        if (!getline(cin, line)) break;
 
         if (line == "quit" || line == "exit") {
-            std::cout << "[TRACKER] Quitting\n";
-            std::raise(SIGINT);   // 🔹 send SIGINT → behaves like Ctrl+C
+            cout << "[TRACKER] Quitting\n";
+            exit(1);
         } else {
-            std::cout << "[TRACKER] Unknown console command: " << line << std::endl;
+            cout << "[TRACKER] Unknown console command: " << line << endl;
         }
     }
 }

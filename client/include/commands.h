@@ -3,10 +3,9 @@
 
 #include <string>
 #include <vector>
+using namespace std;
 
-// ---- Function declaration ----
-// returns true if client should exit
-class Client;   // forward declaration
-int handleCommand(Client &client, const std::string &input);
+class Client;
+int handleCommand(Client &client, const string &input);
 
-#endif // COMMANDS_H
+#endif

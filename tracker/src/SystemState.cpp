@@ -1,10 +1,11 @@
 #include "../include/SystemState.h"
 #include <mutex>
 #include <algorithm>
+using namespace std;
 
-static std::mutex stateMutex;
+static mutex stateMutex;
 
-bool SystemState::createUser(const std::string &userId, const std::string &password, std::string &errMsg) {
+bool SystemState::createUser(const string &userId, const string &password, string &errMsg) {
     if (users.find(userId) != users.end()) {
         errMsg = "User already exists";
         return false;
@@ -13,7 +14,7 @@ bool SystemState::createUser(const std::string &userId, const std::string &passw
     return true;
 }
 
-bool SystemState::loginUser(const std::string &userId, const std::string &password, std::string &errMsg) {
+bool SystemState::loginUser(const string &userId, const string &password, string &errMsg) {
     auto it = users.find(userId);
     if (it == users.end()) {
         errMsg = "User does not exist";
@@ -27,7 +28,7 @@ bool SystemState::loginUser(const std::string &userId, const std::string &passwo
     return true;
 }
 
-bool SystemState::createGroup(const std::string &gid, const std::string &owner, std::string &errMsg) {
+bool SystemState::createGroup(const string &gid, const string &owner, string &errMsg) {
     if (groups.find(gid) != groups.end()) {
         errMsg = "Group already exists";
         return false;
@@ -42,16 +43,16 @@ bool SystemState::createGroup(const std::string &gid, const std::string &owner, 
     return true;
 }
 
-std::vector<std::string> SystemState::listGroups() {
-    std::lock_guard<std::mutex> lock(stateMutex);
-    std::vector<std::string> res;
+vector<string> SystemState::listGroups() {
+    lock_guard<mutex> lock(stateMutex);
+    vector<string> res;
     for (auto &entry : groups) {
         res.push_back(entry.first);
     }
     return res;
 }
 
-bool SystemState::joinGroup(const std::string &gid, const std::string &userId, std::string &errMsg) {
+bool SystemState::joinGroup(const string &gid, const string &userId, string &errMsg) {
     auto it = groups.find(gid);
     if (it == groups.end()) {
         errMsg = "Group does not exist";
@@ -74,7 +75,7 @@ bool SystemState::joinGroup(const std::string &gid, const std::string &userId, s
     return true;
 }
 
-std::vector<std::string> SystemState::listRequests(const std::string &gid, const std::string &owner, std::string &errMsg) {
+vector<string> SystemState::listRequests(const string &gid, const string &owner, string &errMsg) {
     auto it = groups.find(gid);
     if (it == groups.end()) {
         errMsg = "Group does not exist";
@@ -87,11 +88,11 @@ std::vector<std::string> SystemState::listRequests(const std::string &gid, const
         return {};
     }
 
-    std::vector<std::string> requests(grp.pendingRequests.begin(), grp.pendingRequests.end());
+    vector<string> requests(grp.pendingRequests.begin(), grp.pendingRequests.end());
     return requests;
 }
 
-bool SystemState::acceptRequest(const std::string &gid, const std::string &owner, const std::string &userId, std::string &errMsg) {
+bool SystemState::acceptRequest(const string &gid, const string &owner, const string &userId, string &errMsg) {
     auto it = groups.find(gid);
     if (it == groups.end()) {
         errMsg = "Group does not exist";
@@ -109,7 +110,6 @@ bool SystemState::acceptRequest(const std::string &gid, const std::string &owner
         return false;
     }
 
-    // Move user from pending to members
     grp.pendingRequests.erase(userId);
     grp.members.insert(userId);
     grp.memberOrder.push_back(userId);
@@ -118,7 +118,7 @@ bool SystemState::acceptRequest(const std::string &gid, const std::string &owner
     return true;
 }
 
-bool SystemState::leaveGroup(const std::string &gid, const std::string &userId, std::string &errMsg) {
+bool SystemState::leaveGroup(const string &gid, const string &userId, string &errMsg) {
     auto it = groups.find(gid);
     if (it == groups.end()) {
         errMsg = "Group does not exist";
@@ -132,9 +132,8 @@ bool SystemState::leaveGroup(const std::string &gid, const std::string &userId, 
         return false;
     }
 
-    // Case: owner leaving
     if (grp.ownerId == userId) {
-        std::string newOwner;
+        string newOwner;
 
         for (auto &member : grp.memberOrder) {
             if (member != userId && grp.members.count(member)) {
@@ -146,31 +145,29 @@ bool SystemState::leaveGroup(const std::string &gid, const std::string &userId, 
         if (!newOwner.empty()) {
             grp.ownerId = newOwner;
 
-            // remove old owner from memberOrder
+            grp.members.erase(userId);
             grp.memberOrder.erase(
-                std::remove(grp.memberOrder.begin(), grp.memberOrder.end(), userId),
+                remove(grp.memberOrder.begin(), grp.memberOrder.end(), userId),
                 grp.memberOrder.end()
             );
 
             return true;
         } else {
-            // no members left, disband group
             groups.erase(it);
             return true;
         }
     }
 
-    // Case: normal member leaving
     grp.members.erase(userId);
     grp.memberOrder.erase(
-        std::remove(grp.memberOrder.begin(), grp.memberOrder.end(), userId),
+        remove(grp.memberOrder.begin(), grp.memberOrder.end(), userId),
         grp.memberOrder.end()
     );
 
     return true;
 }
 
-bool SystemState::logoutUser(const std::string &userId, std::string &errMsg) {
+bool SystemState::logoutUser(const string &userId, string &errMsg) {
     auto it = users.find(userId);
     if (it == users.end()) {
         errMsg = "User does not exist";
