@@ -1,5 +1,6 @@
 #include "commands.h"
 #include "client.h"
+#include "uploader.h"
 #include "../../common/include/protocol.h"
 #include <iostream>
 #include <sstream>
@@ -46,14 +47,6 @@ int handleCommand(Client &client, const string &input) {
         }
         client.sendMessage(string(CMD_JOIN_GROUP) + " " + args[0]);
     }
-
-    else if (cmd == CMD_UPLOAD_FILE) {
-        if (args.size() < 2) {
-            cerr << "Usage: upload_file <group_id> <file_path>\n";
-            return -1;
-        }
-        client.sendMessage(string(CMD_UPLOAD_FILE) + " " + args[0] + " " + args[1]);
-    }
     else if (cmd == CMD_LIST_REQUESTS) {
         if (args.empty()) {
             cerr << "Usage: list_requests <group_id>\n";
@@ -78,7 +71,23 @@ int handleCommand(Client &client, const string &input) {
     else if (cmd == CMD_LOGOUT) {
         client.sendMessage(string(CMD_LOGOUT));
     }
-
+    else if (cmd == CMD_UPLOAD_FILE) {
+        if (args.size() < 2) {
+        cerr << "Usage: upload_file <group_id> <file_path>\n";
+        return -1;
+        }
+        if (!uploadFile(client, args[1], args[0])) {
+            cerr << "[CLIENT] Upload failed\n";
+            return -1;
+        }
+    }
+    else if (cmd == CMD_LIST_FILES) {
+        if (args.empty()) {
+            cerr << "Usage: list_files <group_id>\n";
+            return -1;
+        }
+        client.sendMessage(string(CMD_LIST_FILES) + " " + args[0] + "\n");
+    }
     else if (cmd == CMD_EXIT) {
         cout<<"[CLIENT] Exiting...\n";
         return 1;

@@ -182,3 +182,60 @@ bool SystemState::logoutUser(const string &userId, string &errMsg) {
     return true;
 }
 
+bool SystemState::uploadFile(const string &gid,
+                             const string &userId,
+                             const string &fileName,
+                             size_t fileSize,
+                             size_t numChunks,
+                             const string &fullHash,
+                             const vector<string> &pieceHashes,
+                             string &errMsg) {
+    // Check group exists
+    if (groups.find(gid) == groups.end()) {
+        errMsg = "Group does not exist";
+        return false;
+    }
+
+    // Check user is a member of the group
+    if (groups[gid].members.find(userId) == groups[gid].members.end()) {
+        errMsg = "User not a member of group " + gid;
+        return false;
+    }
+
+    // Reference to this group's file map
+    auto &files = groupFiles[gid];
+
+    // If file already exists, add peer
+    if (files.find(fileName) != files.end()) {
+        files[fileName].peers.insert(userId);
+        return true;
+    }
+
+    // Otherwise, create new file entry
+    FileMetadata meta;
+    meta.fileName = fileName;
+    meta.fileSize = fileSize;
+    meta.numChunks = numChunks;
+    meta.fullHash = fullHash;
+    meta.pieceHashes = pieceHashes;
+    meta.peers.insert(userId);
+
+    files[fileName] = meta;
+    return true;
+}
+
+vector<string> SystemState::listFiles(const string &gid, string &errMsg) {
+    auto it = groups.find(gid);
+    if (it == groups.end()) {
+        errMsg = "Group does not exist";
+        return {};
+    }
+
+    vector<string> files;
+    if (groupFiles.find(gid) != groupFiles.end()) {
+        for (auto &entry : groupFiles[gid]) {
+            files.push_back(entry.first);  // fileName
+        }
+    }
+    return files;
+}

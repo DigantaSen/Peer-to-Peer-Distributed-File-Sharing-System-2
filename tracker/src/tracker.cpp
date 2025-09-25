@@ -109,39 +109,53 @@ void Tracker::handleClient(int clientSock) {
         sessions[clientSock] = ClientSession();
     }
     char buffer[4096];
+
+    // NEW: keep persistent buffer for partial data
+    string leftover;   // <<< ADDED
+
     while (running.load()) {
         ssize_t bytes = recv(clientSock, buffer, sizeof(buffer) - 1, 0);
         if (bytes > 0) {
-            string msg(buffer, static_cast<size_t>(bytes));
-            
+            buffer[bytes] = '\0';                 // <<< MOVED/ADDED (null terminate)
+            leftover += buffer;                   // <<< APPEND instead of replacing
 
-            while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r')) {
-                msg.pop_back();
-            }
-            cout << "[TRACKER] Received raw: [" << msg << "]\n";
+            size_t pos;
+            // NEW: process all complete lines in leftover
+            while ((pos = leftover.find('\n')) != string::npos) {   // <<< CHANGED
+                string line = leftover.substr(0, pos);              // <<< CHANGED
+                leftover.erase(0, pos + 1);                         // <<< CHANGED
 
-            string response;
-            if (msg == "WHOAREYOU") {
-                response = (role == PRIMARY ? "ROLE PRIMARY" : "ROLE BACKUP");
-            } else {
-                response = processCommand(msg, clientSock);
-                // cout<<"Hiiiii"<<role<<"pppp\n";
-            }
-
-            response += "\n";
-
-            const char *ptr = response.c_str();
-            size_t toSend = response.size();
-            while (toSend > 0) {
-                ssize_t sent = send(clientSock, ptr, toSend, 0);
-                if (sent < 0) {
-                    if (errno == EINTR) continue;
-                    perror("[TRACKER] Send failed");
-                    close(clientSock);
-                    return;
+                // Trim CR or LF from end
+                while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
+                    line.pop_back();                                // <<< NEW
                 }
-                ptr += sent;
-                toSend -= static_cast<size_t>(sent);
+
+                if (line.empty()) continue;                         // <<< NEW
+
+                cout << "[TRACKER] Received raw: [" << line << "]\n";
+
+                string response;
+                if (line == "WHOAREYOU") {
+                    response = (role == PRIMARY ? "ROLE PRIMARY" : "ROLE BACKUP");
+                } else {
+                    response = processCommand(line, clientSock);    // <<< CHANGED (use `line` not `msg`)
+                }
+
+                response += "\n";
+
+                const char *ptr = response.c_str();
+                size_t toSend = response.size();
+                while (toSend > 0) {
+                    ssize_t sent = send(clientSock, ptr, toSend, 0);
+                    if (sent < 0) {
+                        if (errno == EINTR) continue;
+                        perror("[TRACKER] Send failed");
+                        close(clientSock);
+                        return;
+                    }
+                    ptr += sent;
+                    toSend -= static_cast<size_t>(sent);
+                }
             }
         }
         else if (bytes == 0) {
@@ -160,6 +174,7 @@ void Tracker::handleClient(int clientSock) {
     }
     close(clientSock);
 }
+
 
 string Tracker::processCommand(const string &cmd, int clientSock) {
 
@@ -381,6 +396,82 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
 
         return string(PROTO_OK) + " Logged out " + user;
     }
+    else if (action == CMD_UPLOAD_FILE) {
+        string gid, fileName, fullHash;
+        size_t fileSize, numChunks;
+
+        iss >> gid >> fileName >> fileSize >> numChunks >> fullHash;
+        if (gid.empty() || fileName.empty() || fileSize == 0 || numChunks == 0 || fullHash.empty()) {
+            return string(PROTO_ERR) + " Missing arguments for upload_file";
+        }
+
+        // Collect all piece hashes
+        vector<string> pieceHashes;
+        string hash;
+        for (size_t i = 0; i < numChunks; i++) {
+            if (!(iss >> hash)) {
+                return string(PROTO_ERR) + " Piece hashes missing";
+            }
+            pieceHashes.push_back(hash);
+        }
+
+        // Check logged-in user
+        string user;
+        {
+            lock_guard<mutex> lock(sessionMutex);
+            if (!sessions[clientSock].loggedIn) {
+                return string(PROTO_ERR) + " Must be logged in";
+            }
+            user = sessions[clientSock].userId;
+        }
+
+        string errMsg;
+        if (!systemState.uploadFile(gid, user, fileName, fileSize, numChunks, fullHash, pieceHashes, errMsg)) {
+            return string(PROTO_ERR) + " " + errMsg;
+        }
+
+        // Sync to backup tracker
+        ostringstream syncMsg;
+        syncMsg << "UPLOAD_FILE " << gid << " " << user << " "
+                << fileName << " " << fileSize << " " << numChunks << " " << fullHash;
+        for (auto &h : pieceHashes) syncMsg << " " << h;
+        sync.sendUpdate(syncMsg.str());
+
+        return string(PROTO_OK) + " File " + fileName + " uploaded in group " + gid;
+    }
+    else if (action == CMD_LIST_FILES) {
+        string gid;
+        iss >> gid;
+        if (gid.empty()) {
+            return string(PROTO_ERR) + " Missing group_id";
+        }
+
+        string user;
+        {
+            lock_guard<mutex> lock(sessionMutex);
+            if (!sessions[clientSock].loggedIn) {
+                return string(PROTO_ERR) + " Must be logged in";
+            }
+            user = sessions[clientSock].userId;
+        }
+
+        string errMsg;
+        auto files = systemState.listFiles(gid, errMsg);
+        if (!errMsg.empty()) {
+            return string(PROTO_ERR) + " " + errMsg;
+        }
+
+        if (files.empty()) {
+            return string(PROTO_OK) + " No files in group " + gid;
+        }
+
+        string result = string(PROTO_OK) + " Files in group " + gid + ":\n";
+        for (auto &f : files) {
+            result += " - " + f + "\n";
+        }
+        return result;
+    }
+
 
     else {
         return string(PROTO_ERR) + " " + to_string(ERR_INTERNAL) + " Unknown command: " + action;

@@ -13,7 +13,7 @@ TARGET = client
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $(TARGET) $(OBJS)
+	$(CXX) $(CXXFLAGS) -o $(TARGET) $(OBJS) -lcrypto
 
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.cpp $(INC_DIR)/%.h
 	$(CXX) $(CXXFLAGS) -I$(INC_DIR) -I../common/include -c $< -o $@

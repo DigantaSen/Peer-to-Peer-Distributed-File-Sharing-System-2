@@ -128,7 +128,17 @@ string TrackerSync::serializeSystemState() {
         const string &gid = g.first;
         for (auto &f : g.second) {
             const FileMetadata &fm = f.second;
-            out += "FILE " + gid + " " + fm.fileName + " " + fm.fileHash + "\n";
+            out += "FILE " + gid + " " + fm.fileName + " "
+                + to_string(fm.fileSize) + " "
+                + to_string(fm.numChunks) + " "
+                + fm.fullHash + "\n";
+
+            // Piece hashes
+            for (auto &ph : fm.pieceHashes) {
+                out += "PIECE " + gid + " " + fm.fileName + " " + ph + "\n";
+            }
+
+            // Peers
             for (auto &peer : fm.peers) {
                 out += "PEER " + gid + " " + fm.fileName + " " + peer + "\n";
             }
@@ -184,13 +194,23 @@ void TrackerSync::deserializeSystemState(const string &data) {
             systemState.groups[gid].pendingRequests.insert(user);
         } 
         else if (type == "FILE") {
-            string gid, fname, fhash;
-            ls >> gid >> fname >> fhash;
+            string gid, fname, fullHash;
+            size_t fsize, numChunks;
+            ls >> gid >> fname >> fsize >> numChunks >> fullHash;
+
             FileMetadata fm;
             fm.fileName = fname;
-            fm.fileHash = fhash;
+            fm.fileSize = fsize;
+            fm.numChunks = numChunks;
+            fm.fullHash = fullHash;
+
             systemState.groupFiles[gid][fname] = fm;
-        } 
+        }
+        else if (type == "PIECE") {
+            string gid, fname, hash;
+            ls >> gid >> fname >> hash;
+            systemState.groupFiles[gid][fname].pieceHashes.push_back(hash);
+        }
         else if (type == "PEER") {
             string gid, fname, peer;
             ls >> gid >> fname >> peer;
@@ -249,11 +269,26 @@ void TrackerSync::applyUpdate(const string &update) {
         );
     }
     else if (t == "UPLOAD_FILE") {
-        FileMetadata fm;
-        fm.fileName = arg2;
-        fm.fileHash = arg3;
-        systemState.groupFiles[arg1][fm.fileName] = fm;
-    } 
+        istringstream ls(update);
+        string cmd, gid, userId, fileName, fullHash;
+        size_t fileSize, numChunks;
+
+        ls >> cmd >> gid >> userId >> fileName >> fileSize >> numChunks >> fullHash;
+        if (fileName.empty() || fileSize == 0 || numChunks == 0 || fullHash.empty()) {
+            return; // ignore malformed update
+        }
+
+        vector<string> pieceHashes;
+        string hash;
+        for (size_t i = 0; i < numChunks; i++) {
+            if (!(ls >> hash)) break;
+            pieceHashes.push_back(hash);
+        }
+
+        string errMsg;
+        systemState.uploadFile(gid, userId, fileName, fileSize, numChunks, fullHash, pieceHashes, errMsg);
+    }
+
     else if (t == "STOP_SHARE") {
         systemState.groupFiles[arg1].erase(arg2);
     }

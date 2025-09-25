@@ -27,9 +27,13 @@ struct Group {
 
 struct FileMetadata {
     string fileName;
-    string fileHash;
+    size_t fileSize;
+    size_t numChunks;
+    string fullHash;
+    vector<string> pieceHashes;
     set<string> peers;
 };
+
 
 class SystemState {
 public:
@@ -42,6 +46,8 @@ public:
     bool acceptRequest(const string &gid, const string &owner, const string &userId, string &errMsg);
     bool leaveGroup(const string &gid, const string &userId, string &errMsg);
     bool logoutUser(const string &userId, string &errMsg);
+    bool uploadFile(const string &gid, const string &userId, const string &fileName, size_t fileSize, size_t numChunks, const string &fullHash, const vector<string> &pieceHashes, string &errMsg);
+    vector<string> listFiles(const string &gid, string &errMsg);
 
     map<string, User> users;
     map<string, Group> groups;
