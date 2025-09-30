@@ -6,6 +6,8 @@
 #include <sstream>
 using namespace std;
 
+extern std::string lastDestPath; 
+
 int handleCommand(Client &client, const string &input) {
     istringstream iss(input);
     string cmd;
@@ -87,6 +89,14 @@ int handleCommand(Client &client, const string &input) {
             return -1;
         }
         client.sendMessage(string(CMD_LIST_FILES) + " " + args[0] + "\n");
+    }
+    else if (cmd == CMD_DOWNLOAD_FILE) {
+        if (args.size() < 3) {
+            cerr << "Usage: download_file <group_id> <file_name> <dest_path>\n";
+            return -1;
+        }
+        lastDestPath = args[2];
+        client.sendMessage(string(CMD_DOWNLOAD_FILE) + " " + args[0] + " " + args[1] + " " + args[2] + "\n");
     }
     else if (cmd == CMD_EXIT) {
         cout<<"[CLIENT] Exiting...\n";

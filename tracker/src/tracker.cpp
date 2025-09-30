@@ -141,7 +141,9 @@ void Tracker::handleClient(int clientSock) {
                     response = processCommand(line, clientSock);    // <<< CHANGED (use `line` not `msg`)
                 }
 
-                response += "\n";
+                if (response.empty() || response.back() != '\n') {
+                    response.push_back('\n');
+                }
 
                 const char *ptr = response.c_str();
                 size_t toSend = response.size();
@@ -397,11 +399,12 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
         return string(PROTO_OK) + " Logged out " + user;
     }
     else if (action == CMD_UPLOAD_FILE) {
-        string gid, fileName, fullHash;
+        string gid, peerAddr, fileName, fullHash;
         size_t fileSize, numChunks;
 
-        iss >> gid >> fileName >> fileSize >> numChunks >> fullHash;
-        if (gid.empty() || fileName.empty() || fileSize == 0 || numChunks == 0 || fullHash.empty()) {
+        iss >> gid >> peerAddr >> fileName >> fileSize >> numChunks >> fullHash;
+        if (gid.empty() || peerAddr.empty() || fileName.empty() ||
+            fileSize == 0 || numChunks == 0 || fullHash.empty()) {
             return string(PROTO_ERR) + " Missing arguments for upload_file";
         }
 
@@ -415,30 +418,31 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
             pieceHashes.push_back(hash);
         }
 
-        // Check logged-in user
-        string user;
+        // Verify client is logged in
         {
             lock_guard<mutex> lock(sessionMutex);
             if (!sessions[clientSock].loggedIn) {
                 return string(PROTO_ERR) + " Must be logged in";
             }
-            user = sessions[clientSock].userId;
         }
 
         string errMsg;
-        if (!systemState.uploadFile(gid, user, fileName, fileSize, numChunks, fullHash, pieceHashes, errMsg)) {
+        if (!systemState.uploadFile(gid, peerAddr, fileName, fileSize,
+                                    numChunks, fullHash, pieceHashes, errMsg)) {
             return string(PROTO_ERR) + " " + errMsg;
         }
 
-        // Sync to backup tracker
+        // Sync to backup tracker with peerAddr
         ostringstream syncMsg;
-        syncMsg << "UPLOAD_FILE " << gid << " " << user << " "
+        syncMsg << "UPLOAD_FILE " << gid << " " << peerAddr << " "
                 << fileName << " " << fileSize << " " << numChunks << " " << fullHash;
         for (auto &h : pieceHashes) syncMsg << " " << h;
         sync.sendUpdate(syncMsg.str());
 
-        return string(PROTO_OK) + " File " + fileName + " uploaded in group " + gid;
+        return string(PROTO_OK) + " File " + fileName +
+            " uploaded in group " + gid + " by " + peerAddr;
     }
+
     else if (action == CMD_LIST_FILES) {
         string gid;
         iss >> gid;
@@ -470,6 +474,42 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
             result += " - " + f + "\n";
         }
         return result;
+    }
+    else if (action == CMD_DOWNLOAD_FILE) {
+        string gid, fileName, dest;
+        iss >> gid >> fileName >> dest;
+        if (gid.empty() || fileName.empty()) {
+            return string(PROTO_ERR) + " Missing arguments: download_file <group_id> <file_name> <dest>";
+        }
+
+        string user;
+        {
+            lock_guard<mutex> lock(sessionMutex);
+            if (!sessions[clientSock].loggedIn) {
+                return string(PROTO_ERR) + " Must be logged in";
+            }
+            user = sessions[clientSock].userId;
+        }
+
+        FileMetadata meta;
+        string errMsg;
+        if (!systemState.getFileMetadata(gid, fileName, meta, errMsg)) {
+            return string(PROTO_ERR) + " " + errMsg;
+        }
+
+        // Build response
+        ostringstream res;
+        res << PROTO_OK << " DOWNLOAD "
+            << meta.fileName << " "
+            << meta.fileSize << " "
+            << meta.numChunks << " "
+            << meta.fullHash;
+
+        for (auto &h : meta.pieceHashes) res << " " << h;
+        for (auto &p : meta.peers) res << " PEER " << p;
+
+        // res << "\n";
+        return res.str();
     }
 
 

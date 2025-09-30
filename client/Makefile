@@ -1,11 +1,12 @@
 CXX = g++
-CXXFLAGS = -Wall -pthread -std=c++11
+CXXFLAGS = -Wall -pthread -std=c++11 -D_FILE_OFFSET_BITS=64
 SRC_DIR = src
 INC_DIR = include
 COMMON_DIR = ../common/src
 
 OBJS = $(SRC_DIR)/main.o $(SRC_DIR)/client.o $(SRC_DIR)/commands.o \
-       $(SRC_DIR)/downloader.o $(SRC_DIR)/uploader.o $(SRC_DIR)/utils.o \
+       $(SRC_DIR)/downloader.o $(SRC_DIR)/uploader.o $(SRC_DIR)/uploader_server.o \
+       $(SRC_DIR)/utils.o \
        $(COMMON_DIR)/protocol.o $(COMMON_DIR)/sha1.o $(COMMON_DIR)/logger.o
 
 TARGET = client
@@ -15,10 +16,10 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $(TARGET) $(OBJS) -lcrypto
 
-$(SRC_DIR)/%.o: $(SRC_DIR)/%.cpp $(INC_DIR)/%.h
+$(SRC_DIR)/%.o: $(SRC_DIR)/%.cpp
 	$(CXX) $(CXXFLAGS) -I$(INC_DIR) -I../common/include -c $< -o $@
 
-$(COMMON_DIR)/%.o: $(COMMON_DIR)/%.cpp ../common/include/%.h
+$(COMMON_DIR)/%.o: $(COMMON_DIR)/%.cpp
 	$(CXX) $(CXXFLAGS) -I../common/include -c $< -o $@
 
 run: $(TARGET)

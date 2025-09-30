@@ -6,6 +6,7 @@ using namespace std;
 static mutex stateMutex;
 
 bool SystemState::createUser(const string &userId, const string &password, string &errMsg) {
+    lock_guard<mutex> lock(stateMutex);
     if (users.find(userId) != users.end()) {
         errMsg = "User already exists";
         return false;
@@ -15,6 +16,7 @@ bool SystemState::createUser(const string &userId, const string &password, strin
 }
 
 bool SystemState::loginUser(const string &userId, const string &password, string &errMsg) {
+    lock_guard<mutex> lock(stateMutex);
     auto it = users.find(userId);
     if (it == users.end()) {
         errMsg = "User does not exist";
@@ -29,6 +31,7 @@ bool SystemState::loginUser(const string &userId, const string &password, string
 }
 
 bool SystemState::createGroup(const string &gid, const string &owner, string &errMsg) {
+    lock_guard<mutex> lock(stateMutex);
     if (groups.find(gid) != groups.end()) {
         errMsg = "Group already exists";
         return false;
@@ -53,6 +56,8 @@ vector<string> SystemState::listGroups() {
 }
 
 bool SystemState::joinGroup(const string &gid, const string &userId, string &errMsg) {
+
+    lock_guard<mutex> lock(stateMutex);
     auto it = groups.find(gid);
     if (it == groups.end()) {
         errMsg = "Group does not exist";
@@ -76,6 +81,7 @@ bool SystemState::joinGroup(const string &gid, const string &userId, string &err
 }
 
 vector<string> SystemState::listRequests(const string &gid, const string &owner, string &errMsg) {
+    lock_guard<mutex> lock(stateMutex);
     auto it = groups.find(gid);
     if (it == groups.end()) {
         errMsg = "Group does not exist";
@@ -93,6 +99,7 @@ vector<string> SystemState::listRequests(const string &gid, const string &owner,
 }
 
 bool SystemState::acceptRequest(const string &gid, const string &owner, const string &userId, string &errMsg) {
+    lock_guard<mutex> lock(stateMutex);
     auto it = groups.find(gid);
     if (it == groups.end()) {
         errMsg = "Group does not exist";
@@ -119,6 +126,7 @@ bool SystemState::acceptRequest(const string &gid, const string &owner, const st
 }
 
 bool SystemState::leaveGroup(const string &gid, const string &userId, string &errMsg) {
+    lock_guard<mutex> lock(stateMutex);
     auto it = groups.find(gid);
     if (it == groups.end()) {
         errMsg = "Group does not exist";
@@ -168,6 +176,7 @@ bool SystemState::leaveGroup(const string &gid, const string &userId, string &er
 }
 
 bool SystemState::logoutUser(const string &userId, string &errMsg) {
+    lock_guard<mutex> lock(stateMutex);
     auto it = users.find(userId);
     if (it == users.end()) {
         errMsg = "User does not exist";
@@ -183,7 +192,7 @@ bool SystemState::logoutUser(const string &userId, string &errMsg) {
 }
 
 bool SystemState::uploadFile(const string &gid,
-                             const string &userId,
+                             const string &peerAddr,   // ip:port of uploader
                              const string &fileName,
                              size_t fileSize,
                              size_t numChunks,
@@ -196,33 +205,28 @@ bool SystemState::uploadFile(const string &gid,
         return false;
     }
 
-    // Check user is a member of the group
-    if (groups[gid].members.find(userId) == groups[gid].members.end()) {
-        errMsg = "User not a member of group " + gid;
-        return false;
-    }
-
     // Reference to this group's file map
     auto &files = groupFiles[gid];
 
-    // If file already exists, add peer
+    // If file already exists, just add this peer
     if (files.find(fileName) != files.end()) {
-        files[fileName].peers.insert(userId);
+        files[fileName].peers.insert(peerAddr);
         return true;
     }
 
     // Otherwise, create new file entry
     FileMetadata meta;
-    meta.fileName = fileName;
-    meta.fileSize = fileSize;
-    meta.numChunks = numChunks;
-    meta.fullHash = fullHash;
+    meta.fileName    = fileName;
+    meta.fileSize    = fileSize;
+    meta.numChunks   = numChunks;
+    meta.fullHash    = fullHash;
     meta.pieceHashes = pieceHashes;
-    meta.peers.insert(userId);
+    meta.peers.insert(peerAddr);
 
     files[fileName] = meta;
     return true;
 }
+
 
 vector<string> SystemState::listFiles(const string &gid, string &errMsg) {
     auto it = groups.find(gid);
@@ -238,4 +242,21 @@ vector<string> SystemState::listFiles(const string &gid, string &errMsg) {
         }
     }
     return files;
+}
+
+
+bool SystemState::getFileMetadata(const string &gid, const string &fileName, FileMetadata &meta, string &errMsg) {
+    if (groups.find(gid) == groups.end()) {
+        errMsg = "Group does not exist";
+        return false;
+    }
+
+    auto gIt = groupFiles.find(gid);
+    if (gIt == groupFiles.end() || gIt->second.find(fileName) == gIt->second.end()) {
+        errMsg = "File not found in group " + gid;
+        return false;
+    }
+
+    meta = gIt->second[fileName];
+    return true;
 }

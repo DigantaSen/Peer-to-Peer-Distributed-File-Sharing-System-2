@@ -48,6 +48,7 @@ public:
     bool logoutUser(const string &userId, string &errMsg);
     bool uploadFile(const string &gid, const string &userId, const string &fileName, size_t fileSize, size_t numChunks, const string &fullHash, const vector<string> &pieceHashes, string &errMsg);
     vector<string> listFiles(const string &gid, string &errMsg);
+    bool getFileMetadata(const string &gid, const string &fileName, FileMetadata &meta, string &errMsg);
 
     map<string, User> users;
     map<string, Group> groups;

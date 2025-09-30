@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+#include <map>
 
 struct FileMetadata {
     std::string fileName;
@@ -12,6 +13,8 @@ struct FileMetadata {
     std::string fullHash;
     std::vector<std::string> pieceHashes;
 };
+
+extern std::map<std::string, std::string> seedingFiles;
 
 bool uploadFile(class Client &client, const std::string &filePath, const std::string &groupId);
 

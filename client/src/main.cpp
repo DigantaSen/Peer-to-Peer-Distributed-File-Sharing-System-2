@@ -1,5 +1,7 @@
 #include "../include/client.h"
 #include "../include/commands.h"
+#include "../include/downloader.h"
+#include "../include/uploader_server.h"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -8,6 +10,8 @@
 #include <cstring>
 #include <cstdlib>
 using namespace std;
+
+std::string lastDestPath;
 
 int main(int argc, char* argv[]) {
     if (argc != 3) {
@@ -25,6 +29,11 @@ int main(int argc, char* argv[]) {
     int clientPort = stoi(ipPort.substr(colonPos + 1));
 
     cout<<"[CLIENT] My listening IP: "<<clientIP<<", Port: "<<clientPort<<"\n";
+
+    if (!startUploaderServer(clientIP, clientPort)) {
+        cerr << "[CLIENT] Failed to start uploader server\n";
+        return 1;
+    }
 
     const char* infoFile = argv[2];
     int fd = open(infoFile, O_RDONLY);
@@ -91,6 +100,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    client.setSelfAddress(clientIP, clientPort);
+
     while (true) {
         string input;
         cout<<"client> ";
@@ -110,7 +121,15 @@ int main(int argc, char* argv[]) {
             break;
         }
 
-        cout<<"[TRACKER RESPONSE] "<<response<<"\n";
+        if (response.rfind("OK DOWNLOAD", 0) == 0) {
+            // Special case: download metadata
+            DownloadMetadata meta = parseDownloadResponse(response);
+            if (!startDownload(meta, lastDestPath)) {
+                cerr << "[CLIENT] Download failed\n";
+            }
+        } else {
+            cout<<"[TRACKER RESPONSE] "<<response<<"\n";
+        }
     }
 
     client.disconnect();
