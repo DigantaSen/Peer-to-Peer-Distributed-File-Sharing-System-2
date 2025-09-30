@@ -199,6 +199,7 @@ bool SystemState::uploadFile(const string &gid,
                              const string &fullHash,
                              const vector<string> &pieceHashes,
                              string &errMsg) {
+    lock_guard<mutex> lock(stateMutex);
     // Check group exists
     if (groups.find(gid) == groups.end()) {
         errMsg = "Group does not exist";
@@ -216,6 +217,7 @@ bool SystemState::uploadFile(const string &gid,
 
     // Otherwise, create new file entry
     FileMetadata meta;
+    meta.groupId    = gid;
     meta.fileName    = fileName;
     meta.fileSize    = fileSize;
     meta.numChunks   = numChunks;
@@ -229,6 +231,7 @@ bool SystemState::uploadFile(const string &gid,
 
 
 vector<string> SystemState::listFiles(const string &gid, string &errMsg) {
+    lock_guard<mutex> lock(stateMutex);
     auto it = groups.find(gid);
     if (it == groups.end()) {
         errMsg = "Group does not exist";
@@ -246,6 +249,7 @@ vector<string> SystemState::listFiles(const string &gid, string &errMsg) {
 
 
 bool SystemState::getFileMetadata(const string &gid, const string &fileName, FileMetadata &meta, string &errMsg) {
+    lock_guard<mutex> lock(stateMutex);
     if (groups.find(gid) == groups.end()) {
         errMsg = "Group does not exist";
         return false;

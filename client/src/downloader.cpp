@@ -1,6 +1,7 @@
 // downloader.cpp  (replace your existing downloader.cpp with this)
 #include "../include/downloader.h"
 #include "../../common/include/sha1.h"
+#include "../include/uploader.h"
 #include <openssl/sha.h>
 #include <iostream>
 #include <thread>
@@ -98,12 +99,13 @@ DownloadMetadata parseDownloadResponse(const string &response) {
         return meta;
     }
 
-    iss >> meta.fileName >> meta.fileSize >> meta.numChunks >> meta.fullHash;
+    iss >> meta.fileName >> meta.fileSize >> meta.numChunks >> meta.fullHash >> meta.groupId;
     
     cout << "[DEBUG] Parsed: file=" << meta.fileName 
          << " size=" << meta.fileSize 
          << " chunks=" << meta.numChunks 
-         << " hash=" << meta.fullHash << endl;
+         << " hash=" << meta.fullHash
+         << " group=" << meta.groupId << endl;
 
     // Read exactly numChunks piece hashes
     meta.pieceHashes.clear();
@@ -341,7 +343,7 @@ static void downloadWorker(int tid, DownloadContext *ctx) {
 
 // ------------------- Main Download Function -------------------
 
-bool startDownload(const DownloadMetadata &meta, const string &destPath) {
+bool startDownload(Client &client, const DownloadMetadata &meta, const std::string &destPath){
     int fd = open(destPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (fd < 0) {
         perror("[CLIENT] open dest");
@@ -380,5 +382,6 @@ bool startDownload(const DownloadMetadata &meta, const string &destPath) {
         return false;
     }
     cout << "[CLIENT] Download complete: " << destPath << endl;
+    uploadFile(client, destPath, meta.groupId);
     return true;
 }

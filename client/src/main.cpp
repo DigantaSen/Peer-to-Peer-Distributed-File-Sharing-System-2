@@ -124,7 +124,7 @@ int main(int argc, char* argv[]) {
         if (response.rfind("OK DOWNLOAD", 0) == 0) {
             // Special case: download metadata
             DownloadMetadata meta = parseDownloadResponse(response);
-            if (!startDownload(meta, lastDestPath)) {
+            if (!startDownload(client, meta, lastDestPath)) {
                 cerr << "[CLIENT] Download failed\n";
             }
         } else {

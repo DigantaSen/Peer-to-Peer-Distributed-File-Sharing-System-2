@@ -26,6 +26,7 @@ struct Group {
 };
 
 struct FileMetadata {
+    string groupId;
     string fileName;
     size_t fileSize;
     size_t numChunks;

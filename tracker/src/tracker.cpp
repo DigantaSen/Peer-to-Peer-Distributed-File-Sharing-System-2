@@ -503,7 +503,8 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
             << meta.fileName << " "
             << meta.fileSize << " "
             << meta.numChunks << " "
-            << meta.fullHash;
+            << meta.fullHash << " "
+            << meta.groupId;
 
         for (auto &h : meta.pieceHashes) res << " " << h;
         for (auto &p : meta.peers) res << " PEER " << p;
