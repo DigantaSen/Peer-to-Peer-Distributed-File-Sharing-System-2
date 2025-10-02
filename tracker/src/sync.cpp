@@ -138,9 +138,14 @@ string TrackerSync::serializeSystemState() {
                 out += "PIECE " + gid + " " + fm.fileName + " " + ph + "\n";
             }
 
-            // Peers
-            for (auto &peer : fm.peers) {
-                out += "PEER " + gid + " " + fm.fileName + " " + peer + "\n";
+            // Owners (persistent)
+            for (auto &owner : fm.owners) {
+                out += "OWNER " + gid + " " + fm.fileName + " " + owner + "\n";
+            }
+
+            // Active peers (live ip:port)
+            for (auto &peer : fm.activePeers) {
+                out += "ACTIVE " + gid + " " + fm.fileName + " " + peer + "\n";
             }
         }
     }
@@ -211,10 +216,15 @@ void TrackerSync::deserializeSystemState(const string &data) {
             ls >> gid >> fname >> hash;
             systemState.groupFiles[gid][fname].pieceHashes.push_back(hash);
         }
-        else if (type == "PEER") {
+        else if (type == "OWNER") {
+            string gid, fname, owner;
+            ls >> gid >> fname >> owner;
+            systemState.groupFiles[gid][fname].owners.insert(owner);
+        }
+        else if (type == "ACTIVE") {
             string gid, fname, peer;
             ls >> gid >> fname >> peer;
-            systemState.groupFiles[gid][fname].peers.insert(peer);
+            systemState.groupFiles[gid][fname].activePeers.insert(peer);
         }
         else if (type == "ORDER") {
             string gid, user;
@@ -272,11 +282,7 @@ void TrackerSync::applyUpdate(const string &update) {
         istringstream ls(update);
         string cmd, gid, userId, fileName, fullHash;
         size_t fileSize, numChunks;
-
         ls >> cmd >> gid >> userId >> fileName >> fileSize >> numChunks >> fullHash;
-        if (fileName.empty() || fileSize == 0 || numChunks == 0 || fullHash.empty()) {
-            return; // ignore malformed update
-        }
 
         vector<string> pieceHashes;
         string hash;
@@ -287,10 +293,18 @@ void TrackerSync::applyUpdate(const string &update) {
 
         string errMsg;
         systemState.uploadFile(gid, userId, fileName, fileSize, numChunks, fullHash, pieceHashes, errMsg);
+        // ✅ mark uploader as owner
+        systemState.groupFiles[gid][fileName].owners.insert(userId);
     }
 
     else if (t == "STOP_SHARE") {
-        systemState.groupFiles[arg1].erase(arg2);
+        // STOP_SHARE <gid> <fileName> <userId>
+        istringstream ls(update);
+        string cmd, gid, fname, user;
+        ls >> cmd >> gid >> fname >> user;
+
+        string errMsg;
+        systemState.stopShare(gid, user, fname, errMsg);
     }
 }
 

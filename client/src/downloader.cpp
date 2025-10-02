@@ -1,11 +1,13 @@
-// downloader.cpp  (replace your existing downloader.cpp with this)
+// downloader.cpp  (all logs moved to downloads.log)
 #include "../include/downloader.h"
 #include "../../common/include/sha1.h"
 #include "../include/uploader.h"
+#include "../include/uploader_server.h"
+#include "../include/client.h"
 #include <openssl/sha.h>
-#include <iostream>
 #include <thread>
 #include <mutex>
+#include <iostream>
 #include <queue>
 #include <random>
 #include <vector>
@@ -18,16 +20,46 @@
 #include <cstring>
 #include <cerrno>
 #include <map>
+#include <cstdio>
+#include <ctime>
 #include <sys/time.h>
 
 using namespace std;
 
 static const size_t CHUNK = 512 * 1024; // 512 KiB
 
+struct DownloadContext;
+static mutex downloadsMutex;
+static map<string, DownloadContext*> activeDownloads;  // fileName -> context
+
+static std::mutex logMutex;
+static FILE *downloadLog = fopen("downloads.log", "a");
+
+// userId -> (fileName -> SeedInfo)
+map<string, map<string, SeedInfo>> userSeeds;
+
+struct CompletedInfo {
+    std::string path;
+    std::string groupId;
+};
+// userId -> (fileName -> CompletedInfo)
+static map<string, map<string, CompletedInfo>> completedDownloads;
+
+static void logDownloadEvent(const std::string &msg) {
+    lock_guard<mutex> lock(logMutex);
+    if (downloadLog) {
+        time_t now = time(nullptr);
+        char ts[64];
+        strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", localtime(&now));
+        fprintf(downloadLog, "[%s] %s\n", ts, msg.c_str());
+        fflush(downloadLog);
+    }
+}
+
 static bool verifyFullFile(const DownloadMetadata &meta, const std::string &destPath) {
     int fd = open(destPath.c_str(), O_RDONLY);
     if (fd < 0) {
-        perror("[CLIENT] open for verify");
+        logDownloadEvent("[CLIENT] open for verify failed: " + string(strerror(errno)));
         return false;
     }
 
@@ -35,37 +67,35 @@ static bool verifyFullFile(const DownloadMetadata &meta, const std::string &dest
     std::vector<char> buf(BUF);
     ssize_t n;
 
-    // Use OpenSSL streaming SHA1 to avoid buffering entire file
     SHA_CTX ctx;
     if (SHA1_Init(&ctx) != 1) {
-        cerr << "[CLIENT] SHA1_Init failed\n";
+        logDownloadEvent("[CLIENT] SHA1_Init failed");
         close(fd);
         return false;
     }
 
     while ((n = read(fd, buf.data(), BUF)) > 0) {
         if (SHA1_Update(&ctx, reinterpret_cast<unsigned char*>(buf.data()), (size_t)n) != 1) {
-            cerr << "[CLIENT] SHA1_Update failed\n";
+            logDownloadEvent("[CLIENT] SHA1_Update failed");
             close(fd);
             return false;
         }
     }
     if (n < 0) {
-        perror("[CLIENT] read during verify");
+        logDownloadEvent("[CLIENT] read during verify failed: " + string(strerror(errno)));
         close(fd);
         return false;
     }
 
     unsigned char digest[SHA_DIGEST_LENGTH];
     if (SHA1_Final(digest, &ctx) != 1) {
-        cerr << "[CLIENT] SHA1_Final failed\n";
+        logDownloadEvent("[CLIENT] SHA1_Final failed");
         close(fd);
         return false;
     }
 
     close(fd);
 
-    // Convert digest -> hex string
     char hashHex[41];
     for (int i = 0; i < (int)SHA_DIGEST_LENGTH; ++i) {
         sprintf(hashHex + (i * 2), "%02x", digest[i]);
@@ -73,54 +103,50 @@ static bool verifyFullFile(const DownloadMetadata &meta, const std::string &dest
     hashHex[40] = '\0';
 
     if (meta.fullHash != std::string(hashHex)) {
-        cerr << "[CLIENT] Final hash mismatch! Expected "
-             << meta.fullHash << " but got " << hashHex << endl;
+        logDownloadEvent("[CLIENT] Final hash mismatch! Expected " + meta.fullHash + " but got " + string(hashHex));
         return false;
     }
 
-    cout << "[CLIENT] Final file hash verified successfully!" << endl;
+    logDownloadEvent("[CLIENT] Final file hash verified successfully!");
     return true;
 }
 
-// ...existing code...
 DownloadMetadata parseDownloadResponse(const string &response) {
-    cout << "[DEBUG] Full response length: " << response.length() << endl;
-    cout << "[DEBUG] Response: " << response.substr(0, min(response.length(), (size_t)200)) << "..." << endl;
-    
+    logDownloadEvent("[DEBUG] Full response length: " + to_string(response.length()));
+    logDownloadEvent("[DEBUG] Response (truncated): " + response.substr(0, min(response.length(), (size_t)200)));
+
     DownloadMetadata meta;
     istringstream iss(response);
     string status, keyword;
     iss >> status >> keyword;
-    
-    cout << "[DEBUG] Status: '" << status << "', Keyword: '" << keyword << "'" << endl;
-    
+
+    logDownloadEvent("[DEBUG] Status=" + status + " Keyword=" + keyword);
+
     if (status != "OK" || keyword != "DOWNLOAD") {
-        cerr << "[CLIENT] Invalid download response status/keyword" << endl;
+        logDownloadEvent("[CLIENT] Invalid download response status/keyword");
         return meta;
     }
 
     iss >> meta.fileName >> meta.fileSize >> meta.numChunks >> meta.fullHash >> meta.groupId;
-    
-    cout << "[DEBUG] Parsed: file=" << meta.fileName 
-         << " size=" << meta.fileSize 
-         << " chunks=" << meta.numChunks 
-         << " hash=" << meta.fullHash
-         << " group=" << meta.groupId << endl;
 
-    // Read exactly numChunks piece hashes
+    logDownloadEvent("[DEBUG] Parsed: file=" + meta.fileName +
+                     " size=" + to_string(meta.fileSize) +
+                     " chunks=" + to_string(meta.numChunks) +
+                     " hash=" + meta.fullHash +
+                     " group=" + meta.groupId);
+
     meta.pieceHashes.clear();
     meta.pieceHashes.reserve(meta.numChunks);
     for (size_t i = 0; i < meta.numChunks; ++i) {
         string h;
         if (!(iss >> h)) {
-            cerr << "[CLIENT] Incomplete piece hash list (got " << meta.pieceHashes.size()
-                 << " of " << meta.numChunks << ")\n";
+            logDownloadEvent("[CLIENT] Incomplete piece hash list (got " +
+                             to_string(meta.pieceHashes.size()) + " of " + to_string(meta.numChunks) + ")");
             return DownloadMetadata{};
         }
         meta.pieceHashes.push_back(h);
     }
 
-    // Then parse peers as "PEER <ip:port>" pairs
     meta.peers.clear();
     string tok;
     while (iss >> tok) {
@@ -131,25 +157,21 @@ DownloadMetadata parseDownloadResponse(const string &response) {
     }
 
     if (meta.peers.empty()) {
-        cerr << "[CLIENT] No peers provided for download\n";
+        logDownloadEvent("[CLIENT] No peers provided for download");
     }
 
-    cout << "[DEBUG] Final parsed pieces: " << meta.pieceHashes.size() 
-         << ", peers: " << meta.peers.size() << endl;
+    logDownloadEvent("[DEBUG] Final parsed pieces: " + to_string(meta.pieceHashes.size()) +
+                     ", peers: " + to_string(meta.peers.size()));
 
     return meta;
 }
 
-// Compute expected size for a piece index
 static size_t expectedPieceSize(const DownloadMetadata &meta, size_t pieceIndex) {
     if (meta.numChunks == 0) return 0;
     if (pieceIndex + 1 < meta.numChunks) return CHUNK;
-    // last piece:
-    size_t last = meta.fileSize - (meta.numChunks - 1) * CHUNK;
-    return last;
+    return meta.fileSize - (meta.numChunks - 1) * CHUNK;
 }
 
-// Robust requestPiece: read exactly expectedSize bytes (or fail)
 static bool requestPiece(const string &peer,
                          const string &fileName,
                          int pieceIndex,
@@ -166,14 +188,11 @@ static bool requestPiece(const string &peer,
 
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
-        perror("[CLIENT] socket");
+        logDownloadEvent("[CLIENT] socket() failed: " + string(strerror(errno)));
         return false;
     }
 
-    // set a recv timeout so stuck peers don't hang forever
-    struct timeval tv;
-    tv.tv_sec = 8; // 8s timeout (tunable)
-    tv.tv_usec = 0;
+    struct timeval tv{8,0};
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
 
     sockaddr_in addr{};
@@ -185,15 +204,16 @@ static bool requestPiece(const string &peer,
     }
 
     if (connect(sock, (sockaddr*)&addr, sizeof(addr)) < 0) {
+        logDownloadEvent("[CLIENT] connect() to " + peer + " failed: " + string(strerror(errno)));
         close(sock);
         return false;
     }
 
-    // Send request: "GET_PIECE <fileName> <index>\n"
+    logDownloadEvent("[CLIENT] Connected to peer " + peer + " for piece " + to_string(pieceIndex));
+
     string req = "GET_PIECE " + fileName + " " + to_string(pieceIndex) + "\n";
-    ssize_t s = send(sock, req.c_str(), req.size(), 0);
-    if (s < 0) {
-        perror("[CLIENT] send");
+    if (send(sock, req.c_str(), req.size(), 0) < 0) {
+        logDownloadEvent("[CLIENT] send() failed: " + string(strerror(errno)));
         close(sock);
         return false;
     }
@@ -203,54 +223,40 @@ static bool requestPiece(const string &peer,
     while (total < (ssize_t)expectedSize) {
         ssize_t r = recv(sock, reinterpret_cast<char*>(buf.data()) + total, expectedSize - total, 0);
         if (r < 0) {
-            if (errno == EINTR) continue;
-            // timeout or other recv error
-            // log and fail so caller retries other peers
-            // perror("[CLIENT] recv");
+            logDownloadEvent("[CLIENT] recv() error from " + peer + ": " + string(strerror(errno)));
             close(sock);
             return false;
         }
-        if (r == 0) break; // peer closed
+        if (r == 0) break;
         total += r;
     }
-
     close(sock);
 
     if ((size_t)total != expectedSize) {
-        // incomplete piece — treat as failure so it will be retried
-        cerr << "[CLIENT] Piece " << pieceIndex << " from " << peer
-             << " returned " << total << " bytes, expected " << expectedSize << endl;
+        logDownloadEvent("[CLIENT] Piece " + to_string(pieceIndex) + " from " + peer +
+                         " returned " + to_string(total) + " bytes, expected " + to_string(expectedSize));
         return false;
     }
 
-    // If the peer returned an error string (text beginning with "ERR"), detect it
     if (total >= 3 && buf[0] == 'E' && buf[1] == 'R' && buf[2] == 'R') {
-        string errMsg(reinterpret_cast<char*>(buf.data()), (size_t)min(total, (ssize_t)1024));
-        cerr << "[CLIENT] Peer " << peer << " error for piece " << pieceIndex << ": " << errMsg << endl;
+        logDownloadEvent("[CLIENT] Peer " + peer + " error for piece " + to_string(pieceIndex));
         return false;
     }
 
-    // Compute SHA1 on the exact bytes received
     char hashHex[41];
     computeSHA1(reinterpret_cast<char*>(buf.data()), expectedSize, hashHex);
-    string gotHash(hashHex);
-
-    if (gotHash != expectedHash) {
-        cerr << "[CLIENT] Hash mismatch for piece " << pieceIndex
-             << " from peer " << peer << " expected " << expectedHash
-             << " got " << gotHash << endl;
+    if (expectedHash != string(hashHex)) {
+        logDownloadEvent("[CLIENT] Hash mismatch for piece " + to_string(pieceIndex) +
+                         " from " + peer + " expected " + expectedHash + " got " + hashHex);
         return false;
     }
 
-    // Write atomically at offset using pwrite to avoid races between threads
     off_t offset = (off_t)pieceIndex * CHUNK;
     ssize_t written = 0;
-    const uint8_t *writePtr = buf.data();
     while (written < (ssize_t)expectedSize) {
-        ssize_t w = pwrite(fd, writePtr + written, expectedSize - written, offset + written);
+        ssize_t w = pwrite(fd, buf.data() + written, expectedSize - written, offset + written);
         if (w < 0) {
-            if (errno == EINTR) continue;
-            perror("[CLIENT] pwrite");
+            logDownloadEvent("[CLIENT] pwrite failed: " + string(strerror(errno)));
             return false;
         }
         written += w;
@@ -259,62 +265,56 @@ static bool requestPiece(const string &peer,
     return true;
 }
 
+void closeDownloadLog() {
+    lock_guard<mutex> lock(logMutex);
+    if (downloadLog) {
+        fclose(downloadLog);
+        downloadLog = nullptr;
+    }
+}
 
 // ------------------- Worker + Context -------------------
 
 struct DownloadContext {
     queue<size_t> workQueue;
     mutex queueMutex;
-    mutex coutMutex;
     mt19937 rng;
     const DownloadMetadata *meta;
     int fd;
     map<size_t,int> retryCount;
     vector<bool> pieceDone;
+    size_t piecesCompleted = 0;
 };
 
 static void downloadWorker(int tid, DownloadContext *ctx) {
     while (true) {
         size_t pieceIndex;
-
-        // Take next piece index from queue
         {
             lock_guard<mutex> lock(ctx->queueMutex);
             if (ctx->workQueue.empty()) return;
             pieceIndex = ctx->workQueue.front();
             ctx->workQueue.pop();
-
-            if (ctx->pieceDone[pieceIndex]) {
-                continue; // already done
-            }
+            if (ctx->pieceDone[pieceIndex]) continue;
         }
 
         bool success = false;
-
-        // Shuffle peers
         vector<string> peers = ctx->meta->peers;
         shuffle(peers.begin(), peers.end(), ctx->rng);
 
         size_t expectedSize = expectedPieceSize(*ctx->meta, pieceIndex);
-
         for (auto &peer : peers) {
-            if (requestPiece(peer,
-                             ctx->meta->fileName,
-                             (int)pieceIndex,
-                             ctx->meta->pieceHashes[pieceIndex],
-                             expectedSize,
-                             ctx->fd)) {
+            if (requestPiece(peer, ctx->meta->fileName, (int)pieceIndex,
+                             ctx->meta->pieceHashes[pieceIndex], expectedSize, ctx->fd)) {
                 {
-                    lock_guard<mutex> lock(ctx->queueMutex);
-                    ctx->pieceDone[pieceIndex] = true; // mark done
+                    lock_guard<mutex> qlock(ctx->queueMutex);
+                    if (!ctx->pieceDone[pieceIndex]) {
+                        ctx->pieceDone[pieceIndex] = true;
+                        ++ctx->piecesCompleted;
+                    }
                 }
-                {
-                    lock_guard<mutex> lock(ctx->coutMutex);
-                    cout << "[CLIENT] Worker " << tid
-                         << " got piece " << (pieceIndex + 1)
-                         << "/" << ctx->meta->numChunks
-                         << " from " << peer << endl;
-                }
+                logDownloadEvent("[DOWNLOAD] " + ctx->meta->fileName +
+                                 " piece " + to_string(pieceIndex+1) + "/" +
+                                 to_string(ctx->meta->numChunks) + " from " + peer);
                 success = true;
                 break;
             }
@@ -323,65 +323,143 @@ static void downloadWorker(int tid, DownloadContext *ctx) {
         if (!success) {
             lock_guard<mutex> lock(ctx->queueMutex);
             int count = ++ctx->retryCount[pieceIndex];
-            if (!ctx->pieceDone[pieceIndex]) { // only retry if not already done
+            if (!ctx->pieceDone[pieceIndex]) {
                 if (count <= 3) {
                     ctx->workQueue.push(pieceIndex);
-                    lock_guard<mutex> lock2(ctx->coutMutex);
-                    cerr << "[CLIENT] Worker " << tid
-                         << " requeued piece " << pieceIndex
-                         << " (retry " << count << ")" << endl;
+                    logDownloadEvent("[CLIENT] Worker " + to_string(tid) +
+                                     " requeued piece " + to_string(pieceIndex) +
+                                     " (retry " + to_string(count) + ")");
                 } else {
-                    lock_guard<mutex> lock2(ctx->coutMutex);
-                    cerr << "[CLIENT] Worker " << tid
-                         << " gave up on piece " << pieceIndex
-                         << " after " << count << " attempts" << endl;
+                    logDownloadEvent("[CLIENT] Worker " + to_string(tid) +
+                                     " gave up on piece " + to_string(pieceIndex) +
+                                     " after " + to_string(count) + " attempts");
                 }
             }
         }
     }
 }
 
-// ------------------- Main Download Function -------------------
+// Show downloads for a particular user: D = downloading, C = completed (seeded)
+// ⭐ FIXED showDownloads — no nested lock deadlock
+void showDownloads(const string &userId) {
+    bool any = false;
 
-bool startDownload(Client &client, const DownloadMetadata &meta, const std::string &destPath){
-    int fd = open(destPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (fd < 0) {
-        perror("[CLIENT] open dest");
-        return false;
-    }
-    if (ftruncate(fd, meta.fileSize) < 0) {
-        perror("[CLIENT] ftruncate");
-        close(fd);
-        return false;
-    }
-
-    DownloadContext ctx;
-    ctx.meta = &meta;
-    ctx.fd = fd;
-    ctx.rng.seed(random_device{}());
-    ctx.pieceDone.assign(meta.numChunks, false);
-
-    for (size_t i = 0; i < meta.numChunks; i++) {
-        ctx.workQueue.push(i);
+    // ⭐ Copy active downloads snapshot under lock, then release
+    vector<pair<string, DownloadContext*>> snapshot;
+    {
+        lock_guard<mutex> lock(downloadsMutex);
+        for (auto &entry : activeDownloads) {
+            snapshot.push_back(entry);
+        }
     }
 
-    int numThreads = min((size_t)8, meta.numChunks);
-    vector<thread> workers;
-    for (int i = 0; i < numThreads; i++) {
-        workers.emplace_back(downloadWorker, i, &ctx);
+    // Print active downloads without holding downloadsMutex
+    for (auto &entry : snapshot) {
+        DownloadContext *ctx = entry.second;
+        if (!ctx->meta) continue;
+        if (ctx->meta->groupId.empty()) continue;
+
+        any = true;
+        size_t done = 0, total = 0;
+        {
+            lock_guard<mutex> qlock(ctx->queueMutex);
+            done = ctx->piecesCompleted;
+            total = ctx->meta ? ctx->meta->numChunks : 0;
+        }
+        double percent = (total > 0) ? (100.0 * done / total) : 0.0;
+        cout << "[D] " << ctx->meta->groupId << " " << ctx->meta->fileName
+             << " : " << done << "/" << total
+             << " pieces (" << percent << "%)" << endl;
     }
 
-    for (auto &t : workers) {
-        t.join();
+    // ⭐ Copy completed snapshot safely
+    map<string, SeedInfo> completed;
+    {
+        lock_guard<mutex> slock(seedingFilesMutex);
+        auto sit = userSeeds.find(userId);
+        if (sit != userSeeds.end()) {
+            completed = sit->second;  // shallow copy
+        }
     }
 
-    close(fd);
-
-    if (!verifyFullFile(meta, destPath)) {
-        cerr << "[CLIENT] Download failed: file hash mismatch" << endl;
-        return false;
+    for (auto &p : completed) {
+        any = true;
+        cout << "[C] " << p.second.groupId << " " << p.first << endl;
     }
-    cout << "[CLIENT] Download complete: " << destPath << endl;
-    uploadFile(client, destPath, meta.groupId);
+
+    if (!any) {
+        cout << "[CLIENT] No downloads for user " << userId << endl;
+    }
+}
+
+
+
+// ------------------- Main Download -------------------
+
+bool startDownload(Client &client, const DownloadMetadata &meta, const std::string &destPath) {
+    DownloadContext *ctx = new DownloadContext();
+    DownloadMetadata *metaCopy = new DownloadMetadata(meta);
+    ctx->meta = metaCopy;
+    ctx->fd = -1;
+    ctx->rng.seed(random_device{}());
+    ctx->pieceDone.assign(metaCopy->numChunks, false);
+
+    for (size_t i = 0; i < metaCopy->numChunks; ++i) ctx->workQueue.push(i);
+
+    {
+        lock_guard<mutex> lock(downloadsMutex);
+        activeDownloads[metaCopy->fileName] = ctx;
+    }
+
+    thread([ctx, metaCopy, destPath, &client]() {
+        int fd = open(destPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        if (fd < 0) {
+            logDownloadEvent("[CLIENT] open dest failed: " + string(strerror(errno)));
+            lock_guard<mutex> lock(downloadsMutex);
+            activeDownloads.erase(metaCopy->fileName);
+            delete ctx->meta; delete ctx;
+            return;
+        }
+        if (ftruncate(fd, metaCopy->fileSize) < 0) {
+            logDownloadEvent("[CLIENT] ftruncate failed: " + string(strerror(errno)));
+            close(fd);
+            lock_guard<mutex> lock(downloadsMutex);
+            activeDownloads.erase(metaCopy->fileName);
+            delete ctx->meta; delete ctx;
+            return;
+        }
+
+        ctx->fd = fd;
+        int numThreads = min((size_t)8, metaCopy->numChunks);
+        vector<thread> workers;
+        for (int i = 0; i < numThreads; ++i) workers.emplace_back(downloadWorker, i, ctx);
+        for (auto &t : workers) t.join();
+
+        if (ctx->fd >= 0) { close(ctx->fd); ctx->fd = -1; }
+
+        bool ok = verifyFullFile(*metaCopy, destPath);
+        if (!ok) {
+            logDownloadEvent("[CLIENT] Download failed: hash mismatch for " + metaCopy->fileName);
+            unlink(destPath.c_str());
+        } else {
+            cout<<"[CLIENT] Download complete: "<<destPath<<endl;
+            uploadFile(client, destPath, metaCopy->groupId);
+            {
+                lock_guard<mutex> lock(seedingFilesMutex);
+                string userId = client.getUserId();
+                string fileName = destPath.substr(destPath.find_last_of("/\\") + 1);
+                userSeeds[userId][fileName] = {destPath, metaCopy->groupId}; // ✅ Save with groupId
+                logDownloadEvent("[SEEDER] Added " + fileName + " for user " + userId +
+                                 " in group " + metaCopy->groupId);
+            }
+        }
+
+        {
+            lock_guard<mutex> lock(downloadsMutex);
+            activeDownloads.erase(metaCopy->fileName);
+        }
+        delete ctx->meta; delete ctx;
+    }).detach();
+
     return true;
 }

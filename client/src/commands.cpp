@@ -1,7 +1,10 @@
 #include "commands.h"
 #include "client.h"
 #include "uploader.h"
+#include "downloader.h"
+#include "uploader_server.h"
 #include "../../common/include/protocol.h"
+#include "../include/seeds.h"
 #include <iostream>
 #include <sstream>
 using namespace std;
@@ -30,7 +33,11 @@ int handleCommand(Client &client, const string &input) {
             cerr << "Usage: login <user> <pass>\n";
             return -1;
         }
-        client.sendMessage(string(CMD_LOGIN)  + " " + args[0] + " " + args[1]);
+        client.setUserId(args[0]);
+        client.sendMessage(string(CMD_LOGIN)  + " " + args[0] + " " + args[1] + " " + client.getIP() + ":" + to_string(client.getPort()));
+        if (!startUploaderServer(client.getIP(), client.getPort(), args[0])) {
+            cerr << "[CLIENT] Failed to start uploader server for user " << args[0] << "\n";
+        }
     }
     else if (cmd == CMD_CREATE_GROUP) {
         if (args.empty()) {
@@ -98,6 +105,55 @@ int handleCommand(Client &client, const string &input) {
         lastDestPath = args[2];
         client.sendMessage(string(CMD_DOWNLOAD_FILE) + " " + args[0] + " " + args[1] + " " + args[2] + "\n");
     }
+    else if (cmd == CMD_SHOW_DOWNLOADS) {
+        string userId = client.getUserId();
+        if (userId.empty()) {
+            cerr << "[CLIENT] Not logged in.\n";
+            return -1;
+        }
+
+        showDownloads(userId);  // === CHANGED
+        return 2;
+        
+    }
+    else if (cmd == CMD_STOP_SHARE) {
+        if (args.size() < 2) {
+            cerr << "Usage: stopshare <group_id> <file_name>\n";
+            return -1;
+        }
+
+        string gid = args[0];
+        string fileName = args[1];
+        string userId = client.getUserId();
+        if (userId.empty()) {
+            cerr << "[CLIENT] Not logged in.\n";
+            return -1;
+        }
+
+        // Tell tracker
+        client.sendMessage(string(CMD_STOP_SHARE) + " " + gid + " " + fileName + "\n");
+
+        // Remove locally from active seeds
+        {
+            lock_guard<mutex> lock(seedingFilesMutex);
+            auto it = userSeeds.find(userId);
+            if (it != userSeeds.end()) {
+                it->second.erase(fileName);
+            }
+        }
+
+        // Update persistent seeds.txt
+        auto seeds = loadSeeds(userId);
+        auto sit = seeds.find(fileName);
+        if (sit != seeds.end()) {
+            seeds.erase(sit);
+        }
+        saveSeeds(userId, seeds);
+
+        cout << "[CLIENT] Stopped sharing file: " << fileName << " from group " << gid << endl;
+    }
+
+
     else if (cmd == CMD_EXIT) {
         cout<<"[CLIENT] Exiting...\n";
         return 1;

@@ -108,29 +108,41 @@ void Tracker::handleClient(int clientSock) {
         lock_guard<mutex> lock(sessionMutex);
         sessions[clientSock] = ClientSession();
     }
-    char buffer[4096];
 
-    // NEW: keep persistent buffer for partial data
-    string leftover;   // <<< ADDED
+    // capture peer addr and store in session
+    {
+        sockaddr_in peer{};
+        socklen_t peerlen = sizeof(peer);
+        if (getpeername(clientSock, (sockaddr*)&peer, &peerlen) == 0) {
+            char addrbuf[INET_ADDRSTRLEN];
+            if (inet_ntop(AF_INET, &peer.sin_addr, addrbuf, sizeof(addrbuf))) {
+                int port = ntohs(peer.sin_port);
+                string addr = string(addrbuf) + ":" + to_string(port);
+                lock_guard<mutex> lock(sessionMutex);
+                sessions[clientSock].peerAddr = addr;
+            }
+        }
+    }
+
+    char buffer[4096];
+    string leftover;
 
     while (running.load()) {
         ssize_t bytes = recv(clientSock, buffer, sizeof(buffer) - 1, 0);
         if (bytes > 0) {
-            buffer[bytes] = '\0';                 // <<< MOVED/ADDED (null terminate)
-            leftover += buffer;                   // <<< APPEND instead of replacing
+            buffer[bytes] = '\0';
+            leftover += buffer;
 
             size_t pos;
-            // NEW: process all complete lines in leftover
-            while ((pos = leftover.find('\n')) != string::npos) {   // <<< CHANGED
-                string line = leftover.substr(0, pos);              // <<< CHANGED
-                leftover.erase(0, pos + 1);                         // <<< CHANGED
+            while ((pos = leftover.find('\n')) != string::npos) {
+                string line = leftover.substr(0, pos);
+                leftover.erase(0, pos + 1);
 
-                // Trim CR or LF from end
+                // Trim CR/LF
                 while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
-                    line.pop_back();                                // <<< NEW
+                    line.pop_back();
                 }
-
-                if (line.empty()) continue;                         // <<< NEW
+                if (line.empty()) continue;
 
                 cout << "[TRACKER] Received raw: [" << line << "]\n";
 
@@ -138,7 +150,8 @@ void Tracker::handleClient(int clientSock) {
                 if (line == "WHOAREYOU") {
                     response = (role == PRIMARY ? "ROLE PRIMARY" : "ROLE BACKUP");
                 } else {
-                    response = processCommand(line, clientSock);    // <<< CHANGED (use `line` not `msg`)
+                    // processCommand should use session info (sessions[clientSock]) to identify user
+                    response = processCommand(line, clientSock);
                 }
 
                 if (response.empty() || response.back() != '\n') {
@@ -152,28 +165,55 @@ void Tracker::handleClient(int clientSock) {
                     if (sent < 0) {
                         if (errno == EINTR) continue;
                         perror("[TRACKER] Send failed");
-                        close(clientSock);
-                        return;
+                        // treat as disconnect
+                        goto client_cleanup;
                     }
                     ptr += sent;
                     toSend -= static_cast<size_t>(sent);
                 }
             }
-        }
-        else if (bytes == 0) {
+        } else if (bytes == 0) {
             cout << "[TRACKER] Client disconnected\n";
             break;
-        }
-        else {
+        } else {
             if (errno == EINTR) continue;
             perror("[TRACKER] Recv failed");
             break;
         }
     }
+
+client_cleanup:
+    // If the session was logged in, perform logout in SystemState (without holding sessionMutex)
+    string userToLogout;
+    {
+        lock_guard<mutex> lock(sessionMutex);
+        auto it = sessions.find(clientSock);
+        if (it != sessions.end() && it->second.loggedIn) {
+            userToLogout = it->second.userId;
+            // Mark session as logged out locally
+            it->second.loggedIn = false;
+            it->second.userId.clear();
+            it->second.peerAddr.clear();
+        }
+    }
+
+    if (!userToLogout.empty()) {
+        // call SystemState::logoutUser (may take stateMutex). Do this outside sessionMutex.
+        string err;
+        if (!systemState.logoutUser(userToLogout, err)) {
+            // optional: log error
+            cerr << "[TRACKER] Warning: logoutUser failed for " << userToLogout << " : " << err << "\n";
+        } else {
+            // Inform backup of logout
+            sync.sendUpdate(string("LOGOUT ") + userToLogout);
+        }
+    }
+
     {
         lock_guard<mutex> lock(sessionMutex);
         sessions.erase(clientSock);
     }
+
     close(clientSock);
 }
 
@@ -202,14 +242,14 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
         return string(PROTO_OK) + " User created: " + user;
     }
     else if (action == CMD_LOGIN) {
-        string user, pass;
-        iss >> user >> pass;
-        if (user.empty() || pass.empty()) {
+        string user, pass, peerAddr;
+        iss >> user >> pass >> peerAddr;
+        if (user.empty() || pass.empty() || peerAddr.empty()) {
             return string(PROTO_ERR) + " Missing arguments";
         }
 
         string errMsg;
-        if (!systemState.loginUser(user, pass, errMsg)) {
+        if (!systemState.loginUser(user, pass, peerAddr, errMsg)) {
             return string(PROTO_ERR) + " " + errMsg;
         }
 
@@ -217,10 +257,13 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
             lock_guard<mutex> lock(sessionMutex);
             sessions[clientSock].userId = user;
             sessions[clientSock].loggedIn = true;
+            // optionally store peerAddr in session
+            sessions[clientSock].peerAddr = peerAddr;
         }
 
         return string(PROTO_OK) + " Logged in as " + user;
     }
+
     else if (action == CMD_CREATE_GROUP) {
         string gid;
         iss >> gid;
@@ -399,16 +442,15 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
         return string(PROTO_OK) + " Logged out " + user;
     }
     else if (action == CMD_UPLOAD_FILE) {
-        string gid, peerAddr, fileName, fullHash;
-        size_t fileSize, numChunks;
+        string gid, dummyAddr, fileName, fullHash;
+        size_t fileSize = 0, numChunks = 0;
 
-        iss >> gid >> peerAddr >> fileName >> fileSize >> numChunks >> fullHash;
-        if (gid.empty() || peerAddr.empty() || fileName.empty() ||
-            fileSize == 0 || numChunks == 0 || fullHash.empty()) {
+        iss >> gid >> fileName >> fileSize >> numChunks >> fullHash;
+        if (gid.empty() || fileName.empty() || fileSize == 0 || numChunks == 0 || fullHash.empty()) {
             return string(PROTO_ERR) + " Missing arguments for upload_file";
         }
 
-        // Collect all piece hashes
+        // piece hashes
         vector<string> pieceHashes;
         string hash;
         for (size_t i = 0; i < numChunks; i++) {
@@ -418,29 +460,31 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
             pieceHashes.push_back(hash);
         }
 
-        // Verify client is logged in
+        // get logged-in user
+        string user;
         {
             lock_guard<mutex> lock(sessionMutex);
             if (!sessions[clientSock].loggedIn) {
                 return string(PROTO_ERR) + " Must be logged in";
             }
+            user = sessions[clientSock].userId;
         }
 
         string errMsg;
-        if (!systemState.uploadFile(gid, peerAddr, fileName, fileSize,
+        if (!systemState.uploadFile(gid, user, fileName, fileSize,
                                     numChunks, fullHash, pieceHashes, errMsg)) {
             return string(PROTO_ERR) + " " + errMsg;
         }
 
-        // Sync to backup tracker with peerAddr
+        // Sync to backup with username
         ostringstream syncMsg;
-        syncMsg << "UPLOAD_FILE " << gid << " " << peerAddr << " "
+        syncMsg << "UPLOAD_FILE " << gid << " " << user << " "
                 << fileName << " " << fileSize << " " << numChunks << " " << fullHash;
         for (auto &h : pieceHashes) syncMsg << " " << h;
         sync.sendUpdate(syncMsg.str());
 
         return string(PROTO_OK) + " File " + fileName +
-            " uploaded in group " + gid + " by " + peerAddr;
+            " uploaded in group " + gid + " by " + user;
     }
 
     else if (action == CMD_LIST_FILES) {
@@ -497,7 +541,7 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
             return string(PROTO_ERR) + " " + errMsg;
         }
 
-        // Build response
+        // build response
         ostringstream res;
         res << PROTO_OK << " DOWNLOAD "
             << meta.fileName << " "
@@ -507,10 +551,35 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
             << meta.groupId;
 
         for (auto &h : meta.pieceHashes) res << " " << h;
-        for (auto &p : meta.peers) res << " PEER " << p;
+        for (auto &p : meta.activePeers) res << " PEER " << p;
 
-        // res << "\n";
+        cout << "[TRACKER] Sending DOWNLOAD response: " << res.str() << endl;
+
         return res.str();
+    }
+    else if (action == CMD_STOP_SHARE) {
+        string gid, fileName;
+        iss >> gid >> fileName;
+        if (gid.empty() || fileName.empty()) {
+            return string(PROTO_ERR) + " Missing arguments: stopshare <group_id> <file_name>";
+        }
+
+        string user;
+        {
+            lock_guard<mutex> lock(sessionMutex);
+            if (!sessions[clientSock].loggedIn) {
+                return string(PROTO_ERR) + " Must be logged in";
+            }
+            user = sessions[clientSock].userId;
+        }
+
+        string errMsg;
+        if (!systemState.stopShare(gid, user, fileName, errMsg)) {
+            return string(PROTO_ERR) + " " + errMsg;
+        }
+
+        sync.sendUpdate("STOP_SHARE " + gid + " " + fileName + " " + user);
+        return string(PROTO_OK) + " " + user + " stopped sharing " + fileName + " in group " + gid;
     }
 
 

@@ -32,14 +32,14 @@ struct FileMetadata {
     size_t numChunks;
     string fullHash;
     vector<string> pieceHashes;
-    set<string> peers;
+    set<string> owners;     // usernames who uploaded
+    set<string> activePeers;  // current active peers (ip:port)
 };
-
 
 class SystemState {
 public:
     bool createUser(const string &userId, const string &password, string &errMsg);
-    bool loginUser(const string &userId, const string &password, string &errMsg);
+    bool loginUser(const string &userId, const string &password, const string &peerAddr, string &errMsg);
     bool createGroup(const string &gid, const string &owner, string &errMsg);
     vector<string> listGroups();
     bool joinGroup(const string &gid, const string &userId, string &errMsg);
@@ -50,10 +50,13 @@ public:
     bool uploadFile(const string &gid, const string &userId, const string &fileName, size_t fileSize, size_t numChunks, const string &fullHash, const vector<string> &pieceHashes, string &errMsg);
     vector<string> listFiles(const string &gid, string &errMsg);
     bool getFileMetadata(const string &gid, const string &fileName, FileMetadata &meta, string &errMsg);
+    bool stopShare(const string &gid, const string &userId, const string &fileName, string &errMsg);
 
     map<string, User> users;
     map<string, Group> groups;
     map<string, map<string, FileMetadata>> groupFiles;
+    
+    map<string, string> userSessions; // userId -> ip:port
 };
 
 #endif

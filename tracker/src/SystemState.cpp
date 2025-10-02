@@ -15,7 +15,7 @@ bool SystemState::createUser(const string &userId, const string &password, strin
     return true;
 }
 
-bool SystemState::loginUser(const string &userId, const string &password, string &errMsg) {
+bool SystemState::loginUser(const string &userId, const string &password, const string &peerAddr, string &errMsg) {
     lock_guard<mutex> lock(stateMutex);
     auto it = users.find(userId);
     if (it == users.end()) {
@@ -27,8 +27,10 @@ bool SystemState::loginUser(const string &userId, const string &password, string
         return false;
     }
     it->second.loggedIn = true;
+    userSessions[userId] = peerAddr;   // ✅ save current session
     return true;
 }
+
 
 bool SystemState::createGroup(const string &gid, const string &owner, string &errMsg) {
     lock_guard<mutex> lock(stateMutex);
@@ -188,11 +190,13 @@ bool SystemState::logoutUser(const string &userId, string &errMsg) {
     }
 
     it->second.loggedIn = false;
+    userSessions.erase(userId);   // ✅ clear session
     return true;
 }
 
+
 bool SystemState::uploadFile(const string &gid,
-                             const string &peerAddr,   // ip:port of uploader
+                             const string &userId,   // userId of uploader
                              const string &fileName,
                              size_t fileSize,
                              size_t numChunks,
@@ -209,9 +213,9 @@ bool SystemState::uploadFile(const string &gid,
     // Reference to this group's file map
     auto &files = groupFiles[gid];
 
-    // If file already exists, just add this peer
+    // If file already exists, just add this owner
     if (files.find(fileName) != files.end()) {
-        files[fileName].peers.insert(peerAddr);
+        files[fileName].owners.insert(userId);
         return true;
     }
 
@@ -223,7 +227,7 @@ bool SystemState::uploadFile(const string &gid,
     meta.numChunks   = numChunks;
     meta.fullHash    = fullHash;
     meta.pieceHashes = pieceHashes;
-    meta.peers.insert(peerAddr);
+    meta.owners.insert(userId);
 
     files[fileName] = meta;
     return true;
@@ -248,7 +252,10 @@ vector<string> SystemState::listFiles(const string &gid, string &errMsg) {
 }
 
 
-bool SystemState::getFileMetadata(const string &gid, const string &fileName, FileMetadata &meta, string &errMsg) {
+bool SystemState::getFileMetadata(const string &gid,
+                                  const string &fileName,
+                                  FileMetadata &meta,
+                                  string &errMsg) {
     lock_guard<mutex> lock(stateMutex);
     if (groups.find(gid) == groups.end()) {
         errMsg = "Group does not exist";
@@ -262,5 +269,56 @@ bool SystemState::getFileMetadata(const string &gid, const string &fileName, Fil
     }
 
     meta = gIt->second[fileName];
+
+    // ✅ Resolve usernames into live ip:port addresses
+    set<string> resolved;
+    for (auto &userId : meta.owners) {
+        if (userSessions.count(userId)) {
+            resolved.insert(userSessions[userId]);
+        }
+    }
+    meta.activePeers = resolved; // overwrite with reachable peers
+
+    return true;
+}
+
+bool SystemState::stopShare(const string &gid, const string &userId,
+                            const string &fileName, string &errMsg) {
+    // Ensure group exists
+    auto gIt = groupFiles.find(gid);
+    if (gIt == groupFiles.end()) {
+        errMsg = "Group " + gid + " not found";
+        return false;
+    }
+
+    auto &files = gIt->second;
+    auto fIt = files.find(fileName);
+    if (fIt == files.end()) {
+        errMsg = "File " + fileName + " not found in group " + gid;
+        return false;
+    }
+
+    FileMetadata &meta = fIt->second;
+
+    // Ensure user is an owner
+    if (meta.owners.find(userId) == meta.owners.end()) {
+        errMsg = "User " + userId + " is not an owner of file " + fileName;
+        return false;
+    }
+
+    // Remove user ownership
+    meta.owners.erase(userId);
+
+    // Also remove from activePeers (if user is currently logged in)
+    auto sit = userSessions.find(userId);
+    if (sit != userSessions.end()) {
+        meta.activePeers.erase(sit->second);
+    }
+
+    // If no owners left, remove the file from the group
+    if (meta.owners.empty()) {
+        files.erase(fIt);
+    }
+
     return true;
 }

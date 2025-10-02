@@ -11,6 +11,7 @@ private:
     int trackerPort;
     string recvBuf;
     std::string recvBuffer;
+    string userId;
 
     // NEW: client’s own listening address
     string selfIP;
@@ -38,6 +39,9 @@ public:
     // NEW: getters for client’s own address
     string getIP() const { return selfIP; }
     int getPort() const { return selfPort; }
+
+    void setUserId(const string &id) { userId = id; }
+    string getUserId() const { return userId; }
 };
 
 #endif

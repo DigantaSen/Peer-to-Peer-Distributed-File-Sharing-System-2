@@ -3,6 +3,7 @@
 
 #include <string>
 #include <vector>
+using namespace std;
 
 class Client;
 
@@ -18,5 +19,7 @@ struct DownloadMetadata {
 
 DownloadMetadata parseDownloadResponse(const std::string &response);
 bool startDownload(Client &client, const DownloadMetadata &meta, const std::string &destPath);
+void showDownloads(const string &userId);
+void closeDownloadLog();
 
 #endif

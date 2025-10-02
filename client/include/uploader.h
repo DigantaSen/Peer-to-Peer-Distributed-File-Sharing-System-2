@@ -4,7 +4,9 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <mutex>
 
+// Info for a seeding file
 struct FileMetadata {
     std::string fileName;
     std::string filePath;
@@ -14,8 +16,20 @@ struct FileMetadata {
     std::vector<std::string> pieceHashes;
 };
 
-extern std::map<std::string, std::string> seedingFiles;
+// SeedInfo to track both path and groupId
+struct SeedInfo {
+    std::string path;
+    std::string groupId;
+};
 
-bool uploadFile(class Client &client, const std::string &filePath, const std::string &groupId);
+// userId -> (fileName -> SeedInfo)
+extern std::map<std::string, std::map<std::string, SeedInfo>> userSeeds;
+
+// Mutex will be defined in uploader.cpp or a common file
+extern std::mutex seedingFilesMutex;
+
+bool uploadFile(class Client &client,
+                const std::string &filePath,
+                const std::string &groupId);
 
 #endif

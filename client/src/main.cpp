@@ -2,38 +2,42 @@
 #include "../include/commands.h"
 #include "../include/downloader.h"
 #include "../include/uploader_server.h"
+#include "../include/seeds.h"
 #include <iostream>
 #include <string>
 #include <vector>
 #include <unistd.h>
+#include <mutex>
 #include <fcntl.h>
 #include <cstring>
 #include <cstdlib>
+
 using namespace std;
+
+std::mutex ioMutex;
 
 std::string lastDestPath;
 
+extern std::mutex seedingFilesMutex;
+extern std::map<std::string, std::map<std::string, SeedInfo>> userSeeds;
+
 int main(int argc, char* argv[]) {
     if (argc != 3) {
-        cerr<<"Usage: "<<argv[0]<<" <IP:PORT> <tracker_info.txt>\n";
+        cerr << "Usage: " << argv[0] << " <IP:PORT> <tracker_info.txt>\n";
         return 1;
     }
 
     string ipPort = argv[1];
     size_t colonPos = ipPort.find(':');
     if (colonPos == string::npos) {
-        cerr<<"Error: invalid format. Use <IP:PORT>\n";
+        cerr << "Error: invalid format. Use <IP:PORT>\n";
         return 1;
     }
     string clientIP = ipPort.substr(0, colonPos);
     int clientPort = stoi(ipPort.substr(colonPos + 1));
 
-    cout<<"[CLIENT] My listening IP: "<<clientIP<<", Port: "<<clientPort<<"\n";
-
-    if (!startUploaderServer(clientIP, clientPort)) {
-        cerr << "[CLIENT] Failed to start uploader server\n";
-        return 1;
-    }
+    cout << "[CLIENT] My listening IP: " << clientIP
+         << ", Port: " << clientPort << "\n";
 
     const char* infoFile = argv[2];
     int fd = open(infoFile, O_RDONLY);
@@ -43,7 +47,7 @@ int main(int argc, char* argv[]) {
     }
 
     char buffer[1024];
-    ssize_t n = read(fd, buffer, sizeof(buffer)-1);
+    ssize_t n = read(fd, buffer, sizeof(buffer) - 1);
     if (n < 0) {
         perror("read");
         close(fd);
@@ -52,7 +56,7 @@ int main(int argc, char* argv[]) {
     buffer[n] = '\0';
     close(fd);
 
-    vector<pair<string,int>> trackers;
+    vector<pair<string, int>> trackers;
     char* line = strtok(buffer, "\n");
     while (line != nullptr) {
         char tIP[64];
@@ -64,7 +68,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (trackers.empty()) {
-        cerr<<"[CLIENT] No trackers found in "<<infoFile<<"\n";
+        cerr << "[CLIENT] No trackers found in " << infoFile << "\n";
         return 1;
     }
 
@@ -72,11 +76,12 @@ int main(int argc, char* argv[]) {
     bool connected = false;
 
     for (auto &t : trackers) {
-        cout<<"[CLIENT] Trying tracker "<<t.first<<":"<<t.second<<"\n";
+        cout << "[CLIENT] Trying tracker " << t.first << ":" << t.second << "\n";
 
         Client testClient(t.first, t.second);
         if (!testClient.connectToTracker()) {
-            cerr<<"[CLIENT] Connection failed to "<<t.first<<":"<<t.second<<"\n";
+            cerr << "[CLIENT] Connection failed to "
+                 << t.first << ":" << t.second << "\n";
             continue;
         }
 
@@ -84,19 +89,21 @@ int main(int argc, char* argv[]) {
         string resp = testClient.receiveMessage();
 
         if (resp.find("ROLE PRIMARY") != string::npos) {
-            cout<<"[CLIENT] Connected to PRIMARY tracker at "<<t.first<<":"<<t.second<<"\n";
+            cout << "[CLIENT] Connected to PRIMARY tracker at "
+                 << t.first << ":" << t.second << "\n";
 
             client = move(testClient);
             connected = true;
             break;
         } else {
-            cout<<"[CLIENT] "<<t.first<<":"<< t.second<<" is BACKUP, disconnecting...\n";
+            cout << "[CLIENT] " << t.first << ":" << t.second
+                 << " is BACKUP, disconnecting...\n";
             testClient.disconnect();
         }
     }
 
     if (!connected) {
-        cerr<<"[CLIENT] Could not connect to any PRIMARY tracker\n";
+        cerr << "[CLIENT] Could not connect to any PRIMARY tracker\n";
         return 1;
     }
 
@@ -104,20 +111,22 @@ int main(int argc, char* argv[]) {
 
     while (true) {
         string input;
-        cout<<"client> ";
-        getline(cin, input);
+        {
+            lock_guard<mutex> lock(ioMutex);  // 🔒 lock while waiting for input
+            cout << "client> ";
+            getline(cin, input);
+        }
 
-        if(input.empty()) continue;
+        if (input.empty()) continue;
 
         int result = handleCommand(client, input);
         if (result == 1) break;
         if (result == -1) continue;
-        // printf("kkkk\n");
-
+        if (result == 2) continue; // command handled locally
 
         string response = client.receiveMessage();
         if (response.empty()) {
-            cerr<<"[CLIENT] Connection closed by tracker\n";
+            cerr << "[CLIENT] Connection closed by tracker\n";
             break;
         }
 
@@ -127,11 +136,43 @@ int main(int argc, char* argv[]) {
             if (!startDownload(client, meta, lastDestPath)) {
                 cerr << "[CLIENT] Download failed\n";
             }
-        } else {
-            cout<<"[TRACKER RESPONSE] "<<response<<"\n";
+        }
+        else if (response.rfind("OK Logged in as ", 0) == 0) {
+            // ✅ Login success -> restore seeds
+            string userId = response.substr(strlen("OK Logged in as "));
+            cout << "[CLIENT] Logged in as " << userId << endl;
+
+            // Load seeds for this user (with groupId info)
+            {
+                lock_guard<mutex> lock(seedingFilesMutex);
+                userSeeds[userId] = loadSeeds(userId);
+
+                cout << "[SEEDER] Restored " << userSeeds[userId].size()
+                     << " files for user " << userId
+                     << " from seeds.txt" << endl;
+
+                // Debug print restored seeds
+                for (auto &p : userSeeds[userId]) {
+                    cout << "   - " << p.first
+                         << " (group=" << p.second.groupId
+                         << ", path=" << p.second.path << ")" << endl;
+                }
+            }
+        }
+        else if (response.rfind("OK Logged out", 0) == 0) {
+            // Tracker confirmed logout — stop uploader server locally and clear user
+            cout << "[TRACKER RESPONSE] " << response << "\n";
+            stopUploaderServer();            // stop the accept loop cleanly
+            client.setUserId("");            // clear local user
+            cout << "[CLIENT] Local uploader server stopped and logged out.\n";
+        }
+        else {
+            cout << "[TRACKER RESPONSE] " << response << "\n";
         }
     }
 
     client.disconnect();
+    closeUploaderLog();
+    closeDownloadLog();
     return 0;
 }
