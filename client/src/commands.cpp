@@ -23,7 +23,6 @@ int handleCommand(Client &client, const string &input) {
     if (cmd == CMD_CREATE_USER) {
         if (args.size() < 2) {
             cerr << "Usage: create_user <user> <pass>\n";
-            printf("sss\n");
             return -1;
         }
         client.sendMessage(string(CMD_CREATE_USER) + " " + args[0] + " " + args[1]);
