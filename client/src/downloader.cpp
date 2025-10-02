@@ -443,6 +443,12 @@ bool startDownload(Client &client, const DownloadMetadata &meta, const string &d
             thread([destPath, metaCopy, &client]() {
                 lock_guard<mutex> cguard(clientUploadMutex);
                 uploadFile(client, destPath, metaCopy->groupId);
+                {
+                    string trackerResp = client.receiveMessage();
+                    if (!trackerResp.empty()) {
+                        cout << "[TRACKER RESPONSE] " << trackerResp << endl;
+                    }
+                }
 
                 lock_guard<mutex> lock(seedingFilesMutex);
                 string userId = client.getUserId();
@@ -457,7 +463,10 @@ bool startDownload(Client &client, const DownloadMetadata &meta, const string &d
             lock_guard<mutex> lock(downloadsMutex);
             activeDownloads.erase(metaCopy->fileName);
         }
-        delete ctx->meta; delete ctx;
+        delete ctx->meta; 
+        delete ctx;
+
+
     }).detach();
 
     return true;
