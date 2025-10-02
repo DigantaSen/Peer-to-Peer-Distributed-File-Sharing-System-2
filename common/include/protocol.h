@@ -16,6 +16,7 @@
 #define CMD_DOWNLOAD_FILE "download_file"
 #define CMD_LIST_FILES "list_files"
 #define CMD_STOP_SHARE "stop_share"
+#define CMD_SHOW_DOWNLOADS "show_downloads"
 
 #define CMD_EXIT "exit"
 
