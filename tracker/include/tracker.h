@@ -14,7 +14,7 @@ using namespace std;
 struct ClientSession {
     string userId;
     bool loggedIn = false;
-    string peerAddr; // ip:port of the client
+    string peerAddr;
 };
 
 

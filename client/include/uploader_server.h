@@ -4,12 +4,13 @@
 #include <string>
 #include <map>
 #include <mutex>
-#include "seeds.h"   // ✅ for SeedInfo
+#include "seeds.h"
+using namespace std;
 
-extern std::mutex seedingFilesMutex;
-extern std::map<std::string, std::map<std::string, SeedInfo>> userSeeds;
+extern mutex seedingFilesMutex;
+extern map<string, map<string, SeedInfo>> userSeeds;
 
-bool startUploaderServer(const std::string &ip, int port, const std::string &userId);
+bool startUploaderServer(const string &ip, int port, const string &userId);
 void stopUploaderServer();
 void closeUploaderLog();
 

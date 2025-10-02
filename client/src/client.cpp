@@ -73,76 +73,29 @@ bool Client::sendMessage(const string &msg){
     return true;
 }
 
-// replace Client::receiveMessage() with this implementation
-// string Client::receiveMessage() {
-//     if (sock < 0) return "";
-
-//     // If we already buffered a full line, return it immediately
-//     while (true) {
-//         size_t pos = recvBuf.find('\n');
-//         if (pos != string::npos) {
-//             string line = recvBuf.substr(0, pos);
-//             recvBuf.erase(0, pos + 1);
-//             if (!line.empty() && line.back() == '\r') line.pop_back();
-//             return line;
-//         }
-
-//         // Read more bytes from socket
-//         char buffer[4096];
-//         ssize_t n = recv(sock, buffer, sizeof(buffer), 0);
-//         if (n > 0) {
-//             // Append received bytes and loop again to check for newline
-//             recvBuf.append(buffer, (size_t)n);
-//             continue;
-//         } else if (n == 0) {
-//             // Peer closed connection.
-//             // If we have some buffered data, return it as the last line.
-//             if (!recvBuf.empty()) {
-//                 string line = recvBuf;
-//                 recvBuf.clear();
-//                 // Trim trailing newline/cr
-//                 if (!line.empty() && line.back() == '\n') line.pop_back();
-//                 if (!line.empty() && line.back() == '\r') line.pop_back();
-//                 return line;
-//             }
-//             // nothing buffered -> real close
-//             return "";
-//         } else {
-//             // error
-//             if (errno == EINTR) continue;
-//             // For non-fatal errors log and return empty (caller treats as failure)
-//             perror("[CLIENT] Recv failed");
-//             return "";
-//         }
-//     }
-// }
-
 string Client::receiveMessage() {
     if (sock < 0) return "";
 
     while (true) {
-        // Check if we already have at least one complete line
         size_t pos = recvBuf.find('\n');
         if (pos != string::npos) {
-            // Instead of just the first line, return everything we have so far
+
             string msg = recvBuf.substr(0, recvBuf.size());
             recvBuf.clear();
 
-            // Trim trailing CR/LF
             while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r')) {
                 msg.pop_back();
             }
             return msg;
         }
 
-        // Need more data, read from socket
         char buffer[4096];
         ssize_t n = recv(sock, buffer, sizeof(buffer), 0);
         if (n > 0) {
             recvBuf.append(buffer, (size_t)n);
             continue;
         } else if (n == 0) {
-            // peer closed
+
             if (!recvBuf.empty()) {
                 string msg = recvBuf;
                 recvBuf.clear();

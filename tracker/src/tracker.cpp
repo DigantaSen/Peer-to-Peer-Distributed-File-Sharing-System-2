@@ -109,7 +109,6 @@ void Tracker::handleClient(int clientSock) {
         sessions[clientSock] = ClientSession();
     }
 
-    // capture peer addr and store in session
     {
         sockaddr_in peer{};
         socklen_t peerlen = sizeof(peer);
@@ -138,7 +137,6 @@ void Tracker::handleClient(int clientSock) {
                 string line = leftover.substr(0, pos);
                 leftover.erase(0, pos + 1);
 
-                // Trim CR/LF
                 while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
                     line.pop_back();
                 }
@@ -150,7 +148,6 @@ void Tracker::handleClient(int clientSock) {
                 if (line == "WHOAREYOU") {
                     response = (role == PRIMARY ? "ROLE PRIMARY" : "ROLE BACKUP");
                 } else {
-                    // processCommand should use session info (sessions[clientSock]) to identify user
                     response = processCommand(line, clientSock);
                 }
 
@@ -165,7 +162,6 @@ void Tracker::handleClient(int clientSock) {
                     if (sent < 0) {
                         if (errno == EINTR) continue;
                         perror("[TRACKER] Send failed");
-                        // treat as disconnect
                         goto client_cleanup;
                     }
                     ptr += sent;
@@ -183,14 +179,12 @@ void Tracker::handleClient(int clientSock) {
     }
 
 client_cleanup:
-    // If the session was logged in, perform logout in SystemState (without holding sessionMutex)
     string userToLogout;
     {
         lock_guard<mutex> lock(sessionMutex);
         auto it = sessions.find(clientSock);
         if (it != sessions.end() && it->second.loggedIn) {
             userToLogout = it->second.userId;
-            // Mark session as logged out locally
             it->second.loggedIn = false;
             it->second.userId.clear();
             it->second.peerAddr.clear();
@@ -198,13 +192,10 @@ client_cleanup:
     }
 
     if (!userToLogout.empty()) {
-        // call SystemState::logoutUser (may take stateMutex). Do this outside sessionMutex.
         string err;
         if (!systemState.logoutUser(userToLogout, err)) {
-            // optional: log error
             cerr << "[TRACKER] Warning: logoutUser failed for " << userToLogout << " : " << err << "\n";
         } else {
-            // Inform backup of logout
             sync.sendUpdate(string("LOGOUT ") + userToLogout);
         }
     }
@@ -237,7 +228,6 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
         }
 
         sync.sendUpdate(string("CREATE_USER ") + user + " " + pass);
-        // printf("kjjs");
 
         return string(PROTO_OK) + " User created: " + user;
     }
@@ -450,7 +440,6 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
             return string(PROTO_ERR) + " Missing arguments for upload_file";
         }
 
-        // piece hashes
         vector<string> pieceHashes;
         string hash;
         for (size_t i = 0; i < numChunks; i++) {
@@ -460,7 +449,6 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
             pieceHashes.push_back(hash);
         }
 
-        // get logged-in user
         string user;
         {
             lock_guard<mutex> lock(sessionMutex);
@@ -476,7 +464,6 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
             return string(PROTO_ERR) + " " + errMsg;
         }
 
-        // Sync to backup with username
         ostringstream syncMsg;
         syncMsg << "UPLOAD_FILE " << gid << " " << user << " "
                 << fileName << " " << fileSize << " " << numChunks << " " << fullHash;
@@ -541,7 +528,6 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
             return string(PROTO_ERR) + " " + errMsg;
         }
 
-        // build response
         ostringstream res;
         res << PROTO_OK << " DOWNLOAD "
             << meta.fileName << " "

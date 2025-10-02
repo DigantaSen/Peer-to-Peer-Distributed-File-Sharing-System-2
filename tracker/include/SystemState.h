@@ -32,8 +32,8 @@ struct FileMetadata {
     size_t numChunks;
     string fullHash;
     vector<string> pieceHashes;
-    set<string> owners;     // usernames who uploaded
-    set<string> activePeers;  // current active peers (ip:port)
+    set<string> owners;
+    set<string> activePeers;
 };
 
 class SystemState {
@@ -56,7 +56,7 @@ public:
     map<string, Group> groups;
     map<string, map<string, FileMetadata>> groupFiles;
     
-    map<string, string> userSessions; // userId -> ip:port
+    map<string, string> userSessions;
 };
 
 #endif

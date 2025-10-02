@@ -1,4 +1,3 @@
-// downloader.cpp  (all logs moved to downloads.log)
 #include "../include/downloader.h"
 #include "../../common/include/sha1.h"
 #include "../include/uploader.h"
@@ -26,26 +25,25 @@
 
 using namespace std;
 
-static const size_t CHUNK = 512 * 1024; // 512 KiB
+static const size_t CHUNK = 512 * 1024;
 
 struct DownloadContext;
 static mutex downloadsMutex;
-static map<string, DownloadContext*> activeDownloads;  // fileName -> context
+static map<string, DownloadContext*> activeDownloads;
 
-static std::mutex logMutex;
+static mutex logMutex;
 static FILE *downloadLog = fopen("downloads.log", "a");
 
-// userId -> (fileName -> SeedInfo)
 map<string, map<string, SeedInfo>> userSeeds;
 
 struct CompletedInfo {
-    std::string path;
-    std::string groupId;
+    string path;
+    string groupId;
 };
-// userId -> (fileName -> CompletedInfo)
+
 static map<string, map<string, CompletedInfo>> completedDownloads;
 
-static void logDownloadEvent(const std::string &msg) {
+static void logDownloadEvent(const string &msg) {
     lock_guard<mutex> lock(logMutex);
     if (downloadLog) {
         time_t now = time(nullptr);
@@ -56,7 +54,7 @@ static void logDownloadEvent(const std::string &msg) {
     }
 }
 
-static bool verifyFullFile(const DownloadMetadata &meta, const std::string &destPath) {
+static bool verifyFullFile(const DownloadMetadata &meta, const string &destPath) {
     int fd = open(destPath.c_str(), O_RDONLY);
     if (fd < 0) {
         logDownloadEvent("[CLIENT] open for verify failed: " + string(strerror(errno)));
@@ -64,7 +62,7 @@ static bool verifyFullFile(const DownloadMetadata &meta, const std::string &dest
     }
 
     const size_t BUF = 512 * 1024;
-    std::vector<char> buf(BUF);
+    vector<char> buf(BUF);
     ssize_t n;
 
     SHA_CTX ctx;
@@ -102,7 +100,7 @@ static bool verifyFullFile(const DownloadMetadata &meta, const std::string &dest
     }
     hashHex[40] = '\0';
 
-    if (meta.fullHash != std::string(hashHex)) {
+    if (meta.fullHash != string(hashHex)) {
         logDownloadEvent("[CLIENT] Final hash mismatch! Expected " + meta.fullHash + " but got " + string(hashHex));
         return false;
     }
@@ -273,8 +271,6 @@ void closeDownloadLog() {
     }
 }
 
-// ------------------- Worker + Context -------------------
-
 struct DownloadContext {
     queue<size_t> workQueue;
     mutex queueMutex;
@@ -339,12 +335,9 @@ static void downloadWorker(int tid, DownloadContext *ctx) {
     }
 }
 
-// Show downloads for a particular user: D = downloading, C = completed (seeded)
-// ⭐ FIXED showDownloads — no nested lock deadlock
 void showDownloads(const string &userId) {
     bool any = false;
 
-    // ⭐ Copy active downloads snapshot under lock, then release
     vector<pair<string, DownloadContext*>> snapshot;
     {
         lock_guard<mutex> lock(downloadsMutex);
@@ -353,7 +346,6 @@ void showDownloads(const string &userId) {
         }
     }
 
-    // Print active downloads without holding downloadsMutex
     for (auto &entry : snapshot) {
         DownloadContext *ctx = entry.second;
         if (!ctx->meta) continue;
@@ -372,13 +364,12 @@ void showDownloads(const string &userId) {
              << " pieces (" << percent << "%)" << endl;
     }
 
-    // ⭐ Copy completed snapshot safely
-    map<string, SeedInfo> completed;
+    map<string, CompletedInfo> completed;
     {
         lock_guard<mutex> slock(seedingFilesMutex);
-        auto sit = userSeeds.find(userId);
-        if (sit != userSeeds.end()) {
-            completed = sit->second;  // shallow copy
+        auto sit = completedDownloads.find(userId);
+        if (sit != completedDownloads.end()) {
+            completed = sit->second;
         }
     }
 
@@ -393,10 +384,9 @@ void showDownloads(const string &userId) {
 }
 
 
+static mutex clientUploadMutex;
 
-// ------------------- Main Download -------------------
-
-bool startDownload(Client &client, const DownloadMetadata &meta, const std::string &destPath) {
+bool startDownload(Client &client, const DownloadMetadata &meta, const string &destPath) {
     DownloadContext *ctx = new DownloadContext();
     DownloadMetadata *metaCopy = new DownloadMetadata(meta);
     ctx->meta = metaCopy;
@@ -443,15 +433,24 @@ bool startDownload(Client &client, const DownloadMetadata &meta, const std::stri
             unlink(destPath.c_str());
         } else {
             cout<<"[CLIENT] Download complete: "<<destPath<<endl;
-            uploadFile(client, destPath, metaCopy->groupId);
-            {
+             {
                 lock_guard<mutex> lock(seedingFilesMutex);
                 string userId = client.getUserId();
                 string fileName = destPath.substr(destPath.find_last_of("/\\") + 1);
-                userSeeds[userId][fileName] = {destPath, metaCopy->groupId}; // ✅ Save with groupId
-                logDownloadEvent("[SEEDER] Added " + fileName + " for user " + userId +
-                                 " in group " + metaCopy->groupId);
+                completedDownloads[userId][fileName] = {destPath, metaCopy->groupId};
             }
+
+            thread([destPath, metaCopy, &client]() {
+                lock_guard<mutex> cguard(clientUploadMutex);
+                uploadFile(client, destPath, metaCopy->groupId);
+
+                lock_guard<mutex> lock(seedingFilesMutex);
+                string userId = client.getUserId();
+                string fileName = destPath.substr(destPath.find_last_of("/\\") + 1);
+                userSeeds[userId][fileName] = {destPath, metaCopy->groupId};
+                logDownloadEvent("[SEEDER] Added " + fileName + " for user " + userId +
+                                " in group " + metaCopy->groupId);
+            }).detach();
         }
 
         {

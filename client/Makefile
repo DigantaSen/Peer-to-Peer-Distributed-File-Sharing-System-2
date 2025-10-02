@@ -6,8 +6,8 @@ COMMON_DIR = ../common/src
 
 OBJS = $(SRC_DIR)/main.o $(SRC_DIR)/client.o $(SRC_DIR)/commands.o \
        $(SRC_DIR)/downloader.o $(SRC_DIR)/uploader.o $(SRC_DIR)/uploader_server.o \
-       $(SRC_DIR)/utils.o $(SRC_DIR)/seeds.o \
-       $(COMMON_DIR)/protocol.o $(COMMON_DIR)/sha1.o $(COMMON_DIR)/logger.o
+       $(SRC_DIR)/seeds.o \
+       $(COMMON_DIR)/sha1.o
 
 TARGET = client
 

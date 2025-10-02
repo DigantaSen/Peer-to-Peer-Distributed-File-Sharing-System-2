@@ -39,12 +39,10 @@ bool uploadFile(Client &client, const string &filePath, const string &groupId) {
     char *buf = new char[CHUNK];
     ssize_t n;
 
-    // Whole-file SHA1
     SHA_CTX fullCtx;
     SHA1_Init(&fullCtx);
 
     while ((n = read(fd, buf, CHUNK)) > 0) {
-        // per-piece hash
         char hashHex[41];
         computeSHA1(buf, n, hashHex);
         pieceHashes.push_back(string(hashHex));
@@ -55,7 +53,6 @@ bool uploadFile(Client &client, const string &filePath, const string &groupId) {
     close(fd);
     delete[] buf;
 
-    // Finalize whole-file hash
     unsigned char digest[20];
     SHA1_Final(digest, &fullCtx);
     char fullHashHex[41];
@@ -65,7 +62,6 @@ bool uploadFile(Client &client, const string &filePath, const string &groupId) {
 
     string fileName = filePath.substr(filePath.find_last_of("/\\") + 1);
 
-    // 🔑 Send metadata to tracker
     ostringstream msg;
     msg << CMD_UPLOAD_FILE << " "
         << groupId << " "
@@ -82,15 +78,14 @@ bool uploadFile(Client &client, const string &filePath, const string &groupId) {
          << pieceHashes.size() << " pieces, seeder="
          << client.getUserId() << ")" << endl;
 
-    // ✅ Persist this seed for this user with path+groupId
     string userId = client.getUserId();
-    auto seeds = loadSeeds(userId); // load existing
+    auto seeds = loadSeeds(userId);
 
     SeedInfo info;
     info.path = filePath;
     info.groupId = groupId;
 
-    seeds[fileName] = info;  // store filename → {path, groupId}
+    seeds[fileName] = info;
     saveSeeds(userId, seeds);
 
     {

@@ -8,17 +8,17 @@ using namespace std;
 class Client;
 
 struct DownloadMetadata {
-    std::string fileName;
+    string fileName;
     size_t fileSize;
     size_t numChunks;
-    std::string fullHash;
-    std::string groupId;
-    std::vector<std::string> pieceHashes;
-    std::vector<std::string> peers;
+    string fullHash;
+    string groupId;
+    vector<string> pieceHashes;
+    vector<string> peers;
 };
 
-DownloadMetadata parseDownloadResponse(const std::string &response);
-bool startDownload(Client &client, const DownloadMetadata &meta, const std::string &destPath);
+DownloadMetadata parseDownloadResponse(const string &response);
+bool startDownload(Client &client, const DownloadMetadata &meta, const string &destPath);
 void showDownloads(const string &userId);
 void closeDownloadLog();
 

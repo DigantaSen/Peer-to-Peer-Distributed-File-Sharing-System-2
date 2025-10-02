@@ -4,18 +4,17 @@
 #include <sstream>
 #include <iostream>
 #include <sys/stat.h>
+using namespace std;
 
-// Build absolute path for user seed file
-std::string getSeedsFilePath(const std::string &userId) {
+string getSeedsFilePath(const string &userId) {
     const char *home = getenv("HOME");
-    std::string base = (home ? home : ".");
+    string base = (home ? home : ".");
     return base + "/.p2p_seeds_" + userId + ".txt";
 }
 
-// Save seeds: fileName path groupId
-void saveSeeds(const std::string &userId,
-               const std::map<std::string, SeedInfo> &seedingFiles) {
-    std::string path = getSeedsFilePath(userId);
+void saveSeeds(const string &userId,
+               const map<string, SeedInfo> &seedingFiles) {
+    string path = getSeedsFilePath(userId);
     int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (fd < 0) {
         perror("saveSeeds: open");
@@ -23,23 +22,21 @@ void saveSeeds(const std::string &userId,
     }
 
     for (auto &entry : seedingFiles) {
-        // Format: filename path groupId
-        std::string line = entry.first + " " + entry.second.path + " " + entry.second.groupId + "\n";
+        string line = entry.first + " " + entry.second.path + " " + entry.second.groupId + "\n";
         write(fd, line.c_str(), line.size());
     }
     close(fd);
 }
 
-// Load seeds: fileName path groupId
-std::map<std::string, SeedInfo> loadSeeds(const std::string &userId) {
-    std::map<std::string, SeedInfo> seeds;
-    std::string path = getSeedsFilePath(userId);
+map<string, SeedInfo> loadSeeds(const string &userId) {
+    map<string, SeedInfo> seeds;
+    string path = getSeedsFilePath(userId);
     int fd = open(path.c_str(), O_RDONLY);
-    if (fd < 0) return seeds; // no seeds file yet
+    if (fd < 0) return seeds;
 
     char buf[4096];
     ssize_t n;
-    std::string content;
+    string content;
     while ((n = read(fd, buf, sizeof(buf))) > 0) {
         content.append(buf, n);
     }
@@ -48,11 +45,11 @@ std::map<std::string, SeedInfo> loadSeeds(const std::string &userId) {
     size_t pos = 0;
     while (pos < content.size()) {
         size_t end = content.find('\n', pos);
-        if (end == std::string::npos) end = content.size();
-        std::string line = content.substr(pos, end - pos);
+        if (end == string::npos) end = content.size();
+        string line = content.substr(pos, end - pos);
         if (!line.empty()) {
-            std::istringstream iss(line);
-            std::string fileName, filePath, groupId;
+            istringstream iss(line);
+            string fileName, filePath, groupId;
             if (iss >> fileName >> filePath >> groupId) {
                 seeds[fileName] = {filePath, groupId};
             }

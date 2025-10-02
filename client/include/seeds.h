@@ -4,17 +4,14 @@
 #include <map>
 #include <string>
 #include "uploader.h"
+using namespace std;
 
 
+string getSeedsFilePath(const string &userId);
 
-// Return absolute path for a user's seeds file
-std::string getSeedsFilePath(const std::string &userId);
+void saveSeeds(const string &userId,
+               const map<string, SeedInfo> &seedingFiles);
 
-// Save seeds for a user
-void saveSeeds(const std::string &userId,
-               const std::map<std::string, SeedInfo> &seedingFiles);
-
-// Load seeds for a user
-std::map<std::string, SeedInfo> loadSeeds(const std::string &userId);
+map<string, SeedInfo> loadSeeds(const string &userId);
 
 #endif

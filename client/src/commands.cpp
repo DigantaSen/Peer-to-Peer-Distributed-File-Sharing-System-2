@@ -9,7 +9,7 @@
 #include <sstream>
 using namespace std;
 
-extern std::string lastDestPath; 
+extern string lastDestPath; 
 
 int handleCommand(Client &client, const string &input) {
     istringstream iss(input);
@@ -75,7 +75,31 @@ int handleCommand(Client &client, const string &input) {
             cerr << "Usage: leave_group <group_id>\n";
             return -1;
         }
+        string gid = args[0];
+        string userId = client.getUserId();
+        if (userId.empty()) {
+            cerr << "[CLIENT] Not logged in.\n";
+            return -1;
+        }
         client.sendMessage(string(CMD_LEAVE_GROUP) + " " + args[0]);
+        {
+            lock_guard<mutex> lock(seedingFilesMutex);
+            auto it = userSeeds.find(userId);
+            if (it != userSeeds.end()) {
+                vector<string> toErase;
+                for (auto &p : it->second) {
+                    if (p.second.groupId == gid) {
+                        toErase.push_back(p.first);
+                    }
+                }
+                for (auto &fname : toErase) {
+                    it->second.erase(fname);
+                }
+            }
+        }
+
+        saveSeeds(userId, userSeeds[userId]);
+
     }
     else if (cmd == CMD_LOGOUT) {
         client.sendMessage(string(CMD_LOGOUT));
@@ -112,7 +136,7 @@ int handleCommand(Client &client, const string &input) {
             return -1;
         }
 
-        showDownloads(userId);  // === CHANGED
+        showDownloads(userId);
         return 2;
         
     }
@@ -130,10 +154,8 @@ int handleCommand(Client &client, const string &input) {
             return -1;
         }
 
-        // Tell tracker
         client.sendMessage(string(CMD_STOP_SHARE) + " " + gid + " " + fileName + "\n");
 
-        // Remove locally from active seeds
         {
             lock_guard<mutex> lock(seedingFilesMutex);
             auto it = userSeeds.find(userId);
@@ -142,7 +164,6 @@ int handleCommand(Client &client, const string &input) {
             }
         }
 
-        // Update persistent seeds.txt
         auto seeds = loadSeeds(userId);
         auto sit = seeds.find(fileName);
         if (sit != seeds.end()) {

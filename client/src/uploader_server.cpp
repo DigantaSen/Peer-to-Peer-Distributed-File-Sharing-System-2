@@ -1,4 +1,3 @@
-// uploader_server.cpp (logs go to uploads.log)
 #include "../include/uploader.h"
 #include "../include/uploader_server.h"
 #include "../include/seeds.h"
@@ -19,18 +18,16 @@
 #include <iostream>
 using namespace std;
 
-std::mutex seedingFilesMutex;
-// ✅ user -> (fileName -> filePath)
+mutex seedingFilesMutex;
 
 static int serverSock = -1;
-static std::atomic<bool> running{false};
-static std::thread acceptThread;   // keep handle for join
+static atomic<bool> running{false};
+static thread acceptThread;
 
-// ---------- Separate Logging ----------
-static std::mutex logMutex;
+static mutex logMutex;
 static FILE *uploadLog = fopen("uploads.log", "a");
 
-static void logUploadEvent(const std::string &msg) {
+static void logUploadEvent(const string &msg) {
     lock_guard<mutex> lock(logMutex);
     if (uploadLog) {
         time_t now = time(nullptr);
@@ -41,13 +38,12 @@ static void logUploadEvent(const std::string &msg) {
     }
 }
 
-// Helper: send text and close
 static void sendErrAndClose(int sock, const string &msg) {
     send(sock, msg.c_str(), msg.size(), 0);
     close(sock);
 }
 
-static void handlePeerRequest(int clientSock, const std::string &userId) {
+static void handlePeerRequest(int clientSock, const string &userId) {
     char buffer[1024];
     ssize_t n = recv(clientSock, buffer, sizeof(buffer) - 1, 0);
     if (n <= 0) {
@@ -143,7 +139,7 @@ static void handlePeerRequest(int clientSock, const std::string &userId) {
     close(clientSock);
 }
 
-bool startUploaderServer(const std::string &ip, int port, const std::string &userId) {
+bool startUploaderServer(const string &ip, int port, const string &userId) {
     if (running.load()) {
         logUploadEvent("[SEEDER] Already running");
         return false;
@@ -181,17 +177,16 @@ bool startUploaderServer(const std::string &ip, int port, const std::string &use
     running = true;
     logUploadEvent("[SEEDER] Listening on " + ip + ":" + to_string(port) + " as user " + userId);
 
-    // Launch accept loop in dedicated thread (NOT detached)
-    acceptThread = std::thread([=]() {
+    acceptThread = thread([=]() {
         while (running.load()) {
             int clientSock = accept(serverSock, nullptr, nullptr);
             if (clientSock < 0) {
-                if (!running.load()) break;  // graceful stop
+                if (!running.load()) break;
                 logUploadEvent("[SEEDER] accept failed: " + string(strerror(errno)));
                 continue;
             }
             logUploadEvent("[SEEDER] Incoming connection from peer");
-            std::thread([clientSock, userId]() {
+            thread([clientSock, userId]() {
                 handlePeerRequest(clientSock, userId);
             }).detach();
         }
@@ -210,13 +205,13 @@ void stopUploaderServer() {
     running = false;
 
     if (serverSock != -1) {
-        shutdown(serverSock, SHUT_RDWR);  // unblock accept()
+        shutdown(serverSock, SHUT_RDWR);
         close(serverSock);
         serverSock = -1;
     }
 
     if (acceptThread.joinable()) {
-        acceptThread.join();  // wait for accept loop to exit
+        acceptThread.join();
     }
 
     logUploadEvent("[SEEDER] Uploader server stopped");

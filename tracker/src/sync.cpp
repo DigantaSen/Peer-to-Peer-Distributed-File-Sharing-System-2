@@ -41,7 +41,6 @@ void TrackerSync::connectToPeer() {
     peerAddr.sin_port = htons(peerSyncPort);
     inet_pton(AF_INET, peerIP.c_str(), &peerAddr.sin_addr);
     if (connect(connSock, (struct sockaddr*)&peerAddr, sizeof(peerAddr)) < 0) {
-        // printf("fffff\n");
         close(connSock);
         connSock = -1;
     }
@@ -90,14 +89,12 @@ void TrackerSync::acceptBackupConnection() {
 }
 
 void TrackerSync::sendUpdate(const string &update) {
-    // cout<<"[DEBUG] sendUpdate called, role="<<tracker.getRole()<<" connSock="<<connSock<<" update="<<update<<"\n";
     if (tracker.getRole() != PRIMARY) return;
     {
         lock_guard<mutex> lock(logMutex);
         updateLog.push_back(update);
     }
     if (connSock != -1) {
-        // printf("qqq %s %d lll", update.c_str(), tracker.getRole());
         sendMessage("UPDATE " + update);
     }
 }
@@ -133,17 +130,14 @@ string TrackerSync::serializeSystemState() {
                 + to_string(fm.numChunks) + " "
                 + fm.fullHash + "\n";
 
-            // Piece hashes
             for (auto &ph : fm.pieceHashes) {
                 out += "PIECE " + gid + " " + fm.fileName + " " + ph + "\n";
             }
 
-            // Owners (persistent)
             for (auto &owner : fm.owners) {
                 out += "OWNER " + gid + " " + fm.fileName + " " + owner + "\n";
             }
 
-            // Active peers (live ip:port)
             for (auto &peer : fm.activePeers) {
                 out += "ACTIVE " + gid + " " + fm.fileName + " " + peer + "\n";
             }
@@ -160,7 +154,6 @@ string TrackerSync::serializeSystemState() {
 
 void TrackerSync::deserializeSystemState(const string &data) {
     systemState = SystemState();
-    // printf("Hiiii");
     istringstream iss(data);
     string line;
     while (getline(iss, line)) {
@@ -293,12 +286,10 @@ void TrackerSync::applyUpdate(const string &update) {
 
         string errMsg;
         systemState.uploadFile(gid, userId, fileName, fileSize, numChunks, fullHash, pieceHashes, errMsg);
-        // ✅ mark uploader as owner
         systemState.groupFiles[gid][fileName].owners.insert(userId);
     }
 
     else if (t == "STOP_SHARE") {
-        // STOP_SHARE <gid> <fileName> <userId>
         istringstream ls(update);
         string cmd, gid, fname, user;
         ls >> cmd >> gid >> fname >> user;
@@ -374,7 +365,6 @@ void TrackerSync::promoteToPrimary() {
     tracker.setRole(Tracker::PRIMARY);
     cout << "[SYNC] Promoted to PRIMARY (peer died)\n";
     if (connSock != -1) {
-        // printf("rrrr\n");
         close(connSock);
         connSock = -1;
     }

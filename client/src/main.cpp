@@ -14,12 +14,12 @@
 
 using namespace std;
 
-std::mutex ioMutex;
+mutex ioMutex;
 
-std::string lastDestPath;
+string lastDestPath;
 
-extern std::mutex seedingFilesMutex;
-extern std::map<std::string, std::map<std::string, SeedInfo>> userSeeds;
+extern mutex seedingFilesMutex;
+extern map<string, map<string, SeedInfo>> userSeeds;
 
 int main(int argc, char* argv[]) {
     if (argc != 3) {
@@ -112,7 +112,7 @@ int main(int argc, char* argv[]) {
     while (true) {
         string input;
         {
-            lock_guard<mutex> lock(ioMutex);  // 🔒 lock while waiting for input
+            lock_guard<mutex> lock(ioMutex);
             cout << "client> ";
             getline(cin, input);
         }
@@ -122,7 +122,7 @@ int main(int argc, char* argv[]) {
         int result = handleCommand(client, input);
         if (result == 1) break;
         if (result == -1) continue;
-        if (result == 2) continue; // command handled locally
+        if (result == 2) continue;
 
         string response = client.receiveMessage();
         if (response.empty()) {
@@ -131,18 +131,16 @@ int main(int argc, char* argv[]) {
         }
 
         if (response.rfind("OK DOWNLOAD", 0) == 0) {
-            // Special case: download metadata
             DownloadMetadata meta = parseDownloadResponse(response);
             if (!startDownload(client, meta, lastDestPath)) {
                 cerr << "[CLIENT] Download failed\n";
             }
         }
         else if (response.rfind("OK Logged in as ", 0) == 0) {
-            // ✅ Login success -> restore seeds
             string userId = response.substr(strlen("OK Logged in as "));
             cout << "[CLIENT] Logged in as " << userId << endl;
 
-            // Load seeds for this user (with groupId info)
+
             {
                 lock_guard<mutex> lock(seedingFilesMutex);
                 userSeeds[userId] = loadSeeds(userId);
@@ -151,7 +149,6 @@ int main(int argc, char* argv[]) {
                      << " files for user " << userId
                      << " from seeds.txt" << endl;
 
-                // Debug print restored seeds
                 for (auto &p : userSeeds[userId]) {
                     cout << "   - " << p.first
                          << " (group=" << p.second.groupId
@@ -160,10 +157,10 @@ int main(int argc, char* argv[]) {
             }
         }
         else if (response.rfind("OK Logged out", 0) == 0) {
-            // Tracker confirmed logout — stop uploader server locally and clear user
+
             cout << "[TRACKER RESPONSE] " << response << "\n";
-            stopUploaderServer();            // stop the accept loop cleanly
-            client.setUserId("");            // clear local user
+            stopUploaderServer();
+            client.setUserId("");
             cout << "[CLIENT] Local uploader server stopped and logged out.\n";
         }
         else {

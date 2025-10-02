@@ -64,10 +64,6 @@ int main(int argc, char* argv[]) {
 
     Tracker tracker(myIP, myPort, peerIP, peerPort);
 
-
-    // TrackerSync sync(syncPort, peerIP, peerSyncPort, tracker, tracker.getSystemState());
-    // sync.start();
-
     tracker.startSync();
 
     if (tracker.getRole() == Tracker::PRIMARY) {
