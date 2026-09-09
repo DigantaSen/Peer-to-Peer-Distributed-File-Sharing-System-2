@@ -229,7 +229,7 @@ void TrackerSync::deserializeSystemState(const string &data) {
 }
 
 void TrackerSync::applyUpdate(const string &update) {
-    char type[32], arg1[128], arg2[128], arg3[128];
+    char type[32] = {0}, arg1[128] = {0}, arg2[128] = {0}, arg3[128] = {0};
     if (sscanf(update.c_str(), "%31s %127s %127s %127s", type, arg1, arg2, arg3) < 2) {
         return;
     }
@@ -250,26 +250,22 @@ void TrackerSync::applyUpdate(const string &update) {
         g.memberOrder.push_back(arg2);
         systemState.groups[g.groupId] = g;
     }
-    else if (t == "JOIN_REQUEST") {
-        systemState.groups[arg1].pendingRequests.insert(arg2);
+    else if (t == "JOIN_GROUP") {
+        string errMsg;
+        systemState.joinGroup(arg1, arg2, errMsg);
     }
-    else if (t == "JOIN_ACCEPT") {
-        systemState.groups[arg1].members.insert(arg2);
-        systemState.groups[arg1].pendingRequests.erase(arg2);
-        systemState.groups[arg1].memberOrder.push_back(arg2);
+    else if (t == "ACCEPT_REQUEST") {
+        // ACCEPT_REQUEST <gid> <owner> <newMember>
+        string errMsg;
+        systemState.acceptRequest(arg1, arg2, arg3, errMsg);
     }
     else if (t == "LEAVE_GROUP") {
-        auto &grp = systemState.groups[arg1];
-        string user = arg2;
-
-        if (grp.ownerId == user) {
-            grp.ownerId = "";
-        }
-        grp.members.erase(user);
-        grp.memberOrder.erase(
-            remove(grp.memberOrder.begin(), grp.memberOrder.end(), user),
-            grp.memberOrder.end()
-        );
+        string errMsg;
+        systemState.leaveGroup(arg1, arg2, errMsg);
+    }
+    else if (t == "LOGOUT") {
+        string errMsg;
+        systemState.logoutUser(arg1, errMsg);
     }
     else if (t == "UPLOAD_FILE") {
         istringstream ls(update);
