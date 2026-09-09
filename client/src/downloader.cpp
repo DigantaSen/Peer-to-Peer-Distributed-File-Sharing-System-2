@@ -230,14 +230,20 @@ static bool requestPiece(const string &peer,
     }
     close(sock);
 
-    if ((size_t)total != expectedSize) {
-        logDownloadEvent("[CLIENT] Piece " + to_string(pieceIndex) + " from " + peer +
-                         " returned " + to_string(total) + " bytes, expected " + to_string(expectedSize));
+    // Check for an ERR reply before the size check: an error is far shorter
+    // than a piece, so a size-first check reports a bare byte count and hides
+    // the reason the peer refused.
+    if (total >= 3 && buf[0] == 'E' && buf[1] == 'R' && buf[2] == 'R') {
+        string err(reinterpret_cast<char*>(buf.data()), (size_t)total);
+        while (!err.empty() && (err.back() == '\n' || err.back() == '\r')) err.pop_back();
+        logDownloadEvent("[CLIENT] Peer " + peer + " refused piece " +
+                         to_string(pieceIndex) + ": " + err);
         return false;
     }
 
-    if (total >= 3 && buf[0] == 'E' && buf[1] == 'R' && buf[2] == 'R') {
-        logDownloadEvent("[CLIENT] Peer " + peer + " error for piece " + to_string(pieceIndex));
+    if ((size_t)total != expectedSize) {
+        logDownloadEvent("[CLIENT] Piece " + to_string(pieceIndex) + " from " + peer +
+                         " returned " + to_string(total) + " bytes, expected " + to_string(expectedSize));
         return false;
     }
 
@@ -427,8 +433,24 @@ bool startDownload(Client &client, const DownloadMetadata &meta, const string &d
 
         if (ctx->fd >= 0) { close(ctx->fd); ctx->fd = -1; }
 
-        bool ok = verifyFullFile(*metaCopy, destPath);
-        if (!ok) {
+        size_t done;
+        {
+            lock_guard<mutex> qlock(ctx->queueMutex);
+            done = ctx->piecesCompleted;
+        }
+
+        bool ok;
+        if (done != metaCopy->numChunks) {
+            // Hashing an incomplete file only ever reports "hash mismatch",
+            // which points at corruption instead of at the missing pieces.
+            logDownloadEvent("[CLIENT] Download failed: only " + to_string(done) + " of " +
+                             to_string(metaCopy->numChunks) + " pieces of " +
+                             metaCopy->fileName + " could be fetched from any peer");
+            cerr << "[CLIENT] Download failed: " << (metaCopy->numChunks - done) << " of "
+                 << metaCopy->numChunks << " pieces unavailable from any peer\n";
+            ok = false;
+            unlink(destPath.c_str());
+        } else if (!(ok = verifyFullFile(*metaCopy, destPath))) {
             logDownloadEvent("[CLIENT] Download failed: hash mismatch for " + metaCopy->fileName);
             unlink(destPath.c_str());
         } else {

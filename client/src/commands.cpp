@@ -9,7 +9,8 @@
 #include <sstream>
 using namespace std;
 
-extern string lastDestPath; 
+extern string lastDestPath;
+extern string pendingLoginUser;
 
 int handleCommand(Client &client, const string &input) {
     istringstream iss(input);
@@ -32,11 +33,26 @@ int handleCommand(Client &client, const string &input) {
             cerr << "Usage: login <user> <pass>\n";
             return -1;
         }
-        client.setUserId(args[0]);
-        client.sendMessage(string(CMD_LOGIN)  + " " + args[0] + " " + args[1] + " " + client.getIP() + ":" + to_string(client.getPort()));
-        if (!startUploaderServer(client.getIP(), client.getPort(), args[0])) {
-            cerr << "[CLIENT] Failed to start uploader server for user " << args[0] << "\n";
+        // A second login in the same process leaves the tracker holding a
+        // session for the earlier user at this address, while we can only ever
+        // serve one user from one port. Force an explicit logout instead.
+        if (!client.getUserId().empty()) {
+            cerr << "[CLIENT] Already logged in as " << client.getUserId()
+                 << ". Run logout before logging in as another user.\n";
+            return -1;
         }
+        // Bring the seeder up as this user BEFORE telling the tracker we are
+        // reachable here. Announcing first meant a failed/skipped seeder start
+        // left the tracker advertising our address for a user we do not serve,
+        // and every GET_PIECE came back "ERR File not available".
+        if (!startUploaderServer(client.getIP(), client.getPort(), args[0])) {
+            cerr << "[CLIENT] Failed to start uploader server for user " << args[0]
+                 << "; not logging in.\n";
+            return -1;
+        }
+        client.setUserId(args[0]);
+        pendingLoginUser = args[0];
+        client.sendMessage(string(CMD_LOGIN)  + " " + args[0] + " " + args[1] + " " + client.getIP() + ":" + to_string(client.getPort()));
     }
     else if (cmd == CMD_CREATE_GROUP) {
         if (args.empty()) {
@@ -81,6 +97,8 @@ int handleCommand(Client &client, const string &input) {
             return -1;
         }
         client.sendMessage(string(CMD_LEAVE_GROUP) + " " + args[0]);
+        map<string, SeedInfo> remaining;
+        bool haveSeeds = false;
         {
             lock_guard<mutex> lock(seedingFilesMutex);
             auto it = userSeeds.find(userId);
@@ -94,10 +112,17 @@ int handleCommand(Client &client, const string &input) {
                 for (auto &fname : toErase) {
                     it->second.erase(fname);
                 }
+                remaining = it->second;
+                haveSeeds = true;
             }
         }
 
-        saveSeeds(userId, userSeeds[userId]);
+        // Only rewrite the seed file if this user actually has an in-memory
+        // table. userSeeds[userId] would default-construct an empty map and
+        // truncate the saved seeds to nothing.
+        if (haveSeeds) {
+            saveSeeds(userId, remaining);
+        }
 
     }
     else if (cmd == CMD_LOGOUT) {

@@ -17,6 +17,7 @@ using namespace std;
 mutex ioMutex;
 
 string lastDestPath;
+string pendingLoginUser;
 
 extern mutex seedingFilesMutex;
 extern map<string, map<string, SeedInfo>> userSeeds;
@@ -128,6 +129,18 @@ int main(int argc, char* argv[]) {
         if (response.empty()) {
             cerr << "[CLIENT] Connection closed by tracker\n";
             break;
+        }
+
+        // If the tracker refused a login, do not leave a seeder running for a
+        // user the tracker has no session for.
+        if (!pendingLoginUser.empty()) {
+            if (response.rfind("OK Logged in as ", 0) != 0) {
+                cerr << "[CLIENT] Login failed for " << pendingLoginUser
+                     << "; stopping uploader server.\n";
+                stopUploaderServer();
+                client.setUserId("");
+            }
+            pendingLoginUser.clear();
         }
 
         if (response.rfind("OK DOWNLOAD", 0) == 0) {

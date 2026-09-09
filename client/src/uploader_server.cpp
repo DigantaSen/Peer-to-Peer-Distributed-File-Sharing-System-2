@@ -23,6 +23,7 @@ mutex seedingFilesMutex;
 static int serverSock = -1;
 static atomic<bool> running{false};
 static thread acceptThread;
+static string serverUserId;
 
 static mutex logMutex;
 static FILE *uploadLog = fopen("uploads.log", "a");
@@ -141,8 +142,17 @@ static void handlePeerRequest(int clientSock, const string &userId) {
 
 bool startUploaderServer(const string &ip, int port, const string &userId) {
     if (running.load()) {
-        logUploadEvent("[SEEDER] Already running");
-        return false;
+        if (serverUserId == userId) {
+            logUploadEvent("[SEEDER] Already running as user " + userId);
+            return true;
+        }
+        // The accept loop captures its userId by value, so a running server can
+        // never start serving a different user. Tear it down and rebind, or we
+        // would keep answering as the previous user while the tracker
+        // advertises this address for the new one.
+        logUploadEvent("[SEEDER] User switch: was serving " + serverUserId +
+                       ", restarting as " + userId);
+        stopUploaderServer();
     }
 
     serverSock = socket(AF_INET, SOCK_STREAM, 0);
@@ -175,6 +185,7 @@ bool startUploaderServer(const string &ip, int port, const string &userId) {
     }
 
     running = true;
+    serverUserId = userId;
     logUploadEvent("[SEEDER] Listening on " + ip + ":" + to_string(port) + " as user " + userId);
 
     acceptThread = thread([=]() {
@@ -214,7 +225,8 @@ void stopUploaderServer() {
         acceptThread.join();
     }
 
-    logUploadEvent("[SEEDER] Uploader server stopped");
+    logUploadEvent("[SEEDER] Uploader server stopped for user " + serverUserId);
+    serverUserId.clear();
 }
 
 void closeUploaderLog() {
