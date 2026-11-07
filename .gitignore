@@ -1,0 +1,27 @@
+# Build output
+*.o
+tracker/tracker
+client/client
+
+# Runtime files written by the client
+*.log
+client/downloads/
+downloads/
+
+# Test kit and test data (large binaries, not part of the source)
+client/fixtures/
+client/bin/
+fixtures/
+COMMANDS.md
+
+# Media (GitHub rejects files over 100 MB)
+*.mp4
+*.mkv
+
+# Personal study material
+Viva_Question_Bank.pdf
+
+# OS and editor files
+.DS_Store
+*:Zone.Identifier
+.vscode/

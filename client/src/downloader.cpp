@@ -455,16 +455,21 @@ bool startDownload(Client &client, const DownloadMetadata &meta, const string &d
             unlink(destPath.c_str());
         } else {
             cout<<"[CLIENT] Download complete: "<<destPath<<endl;
+            // Track and re-share the file under its original name, whatever the
+            // destination is called, so this client becomes another seeder of
+            // the same file instead of registering a new one. Copy the strings:
+            // metaCopy is deleted below, before the re-share thread runs.
+            string fileName = metaCopy->fileName;
+            string groupId = metaCopy->groupId;
              {
                 lock_guard<mutex> lock(seedingFilesMutex);
                 string userId = client.getUserId();
-                string fileName = destPath.substr(destPath.find_last_of("/\\") + 1);
-                completedDownloads[userId][fileName] = {destPath, metaCopy->groupId};
+                completedDownloads[userId][fileName] = {destPath, groupId};
             }
 
-            thread([destPath, metaCopy, &client]() {
+            thread([destPath, fileName, groupId, &client]() {
                 lock_guard<mutex> cguard(clientUploadMutex);
-                uploadFile(client, destPath, metaCopy->groupId);
+                uploadFile(client, destPath, groupId, fileName);
                 {
                     string trackerResp = client.receiveMessage();
                     if (!trackerResp.empty()) {
@@ -474,10 +479,9 @@ bool startDownload(Client &client, const DownloadMetadata &meta, const string &d
 
                 lock_guard<mutex> lock(seedingFilesMutex);
                 string userId = client.getUserId();
-                string fileName = destPath.substr(destPath.find_last_of("/\\") + 1);
-                userSeeds[userId][fileName] = {destPath, metaCopy->groupId};
+                userSeeds[userId][fileName] = {destPath, groupId};
                 logDownloadEvent("[SEEDER] Added " + fileName + " for user " + userId +
-                                " in group " + metaCopy->groupId);
+                                " in group " + groupId);
             }).detach();
         }
 

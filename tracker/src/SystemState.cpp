@@ -225,8 +225,13 @@ bool SystemState::uploadFile(const string &gid,
                              string &errMsg) {
     lock_guard<mutex> lock(stateMutex);
 
-    if (groups.find(gid) == groups.end()) {
+    auto git = groups.find(gid);
+    if (git == groups.end()) {
         errMsg = "Group does not exist";
+        return false;
+    }
+    if (!git->second.members.count(userId)) {
+        errMsg = "You are not a member of group " + gid;
         return false;
     }
 
@@ -251,11 +256,15 @@ bool SystemState::uploadFile(const string &gid,
 }
 
 
-vector<string> SystemState::listFiles(const string &gid, string &errMsg) {
+vector<string> SystemState::listFiles(const string &gid, const string &userId, string &errMsg) {
     lock_guard<mutex> lock(stateMutex);
     auto it = groups.find(gid);
     if (it == groups.end()) {
         errMsg = "Group does not exist";
+        return {};
+    }
+    if (!it->second.members.count(userId)) {
+        errMsg = "You are not a member of group " + gid;
         return {};
     }
 
@@ -270,12 +279,18 @@ vector<string> SystemState::listFiles(const string &gid, string &errMsg) {
 
 
 bool SystemState::getFileMetadata(const string &gid,
+                                  const string &userId,
                                   const string &fileName,
                                   FileMetadata &meta,
                                   string &errMsg) {
     lock_guard<mutex> lock(stateMutex);
-    if (groups.find(gid) == groups.end()) {
+    auto git = groups.find(gid);
+    if (git == groups.end()) {
         errMsg = "Group does not exist";
+        return false;
+    }
+    if (!git->second.members.count(userId)) {
+        errMsg = "You are not a member of group " + gid;
         return false;
     }
 

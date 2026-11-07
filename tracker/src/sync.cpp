@@ -197,6 +197,7 @@ void TrackerSync::deserializeSystemState(const string &data) {
             ls >> gid >> fname >> fsize >> numChunks >> fullHash;
 
             FileMetadata fm;
+            fm.groupId = gid;
             fm.fileName = fname;
             fm.fileSize = fsize;
             fm.numChunks = numChunks;
@@ -281,8 +282,9 @@ void TrackerSync::applyUpdate(const string &update) {
         }
 
         string errMsg;
-        systemState.uploadFile(gid, userId, fileName, fileSize, numChunks, fullHash, pieceHashes, errMsg);
-        systemState.groupFiles[gid][fileName].owners.insert(userId);
+        if (!systemState.uploadFile(gid, userId, fileName, fileSize, numChunks, fullHash, pieceHashes, errMsg)) {
+            cout << "[SYNC] UPLOAD_FILE rejected on replay: " << errMsg << "\n";
+        }
     }
 
     else if (t == "STOP_SHARE") {

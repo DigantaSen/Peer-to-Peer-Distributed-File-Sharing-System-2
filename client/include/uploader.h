@@ -25,8 +25,12 @@ extern map<string, map<string, SeedInfo>> userSeeds;
 
 extern mutex seedingFilesMutex;
 
+// shareName: name to register the file under; defaults to the basename of filePath.
+// A finished download passes the original file name so it is re-shared as the
+// same file, not under its local destination name.
 bool uploadFile(class Client &client,
                 const string &filePath,
-                const string &groupId);
+                const string &groupId,
+                const string &shareName = "");
 
 #endif

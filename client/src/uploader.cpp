@@ -18,7 +18,7 @@
 
 using namespace std;
 
-bool uploadFile(Client &client, const string &filePath, const string &groupId) {
+bool uploadFile(Client &client, const string &filePath, const string &groupId, const string &shareName) {
     struct stat st;
     if (stat(filePath.c_str(), &st) < 0) {
         cerr << "[UPLOAD] Could not stat file: " << filePath
@@ -60,7 +60,9 @@ bool uploadFile(Client &client, const string &filePath, const string &groupId) {
     fullHashHex[40] = '\0';
     string fullHash(fullHashHex);
 
-    string fileName = filePath.substr(filePath.find_last_of("/\\") + 1);
+    string fileName = shareName.empty()
+                          ? filePath.substr(filePath.find_last_of("/\\") + 1)
+                          : shareName;
 
     ostringstream msg;
     msg << CMD_UPLOAD_FILE << " "

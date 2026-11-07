@@ -491,7 +491,7 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
         }
 
         string errMsg;
-        auto files = systemState.listFiles(gid, errMsg);
+        auto files = systemState.listFiles(gid, user, errMsg);
         if (!errMsg.empty()) {
             return string(PROTO_ERR) + " " + errMsg;
         }
@@ -524,7 +524,7 @@ string Tracker::processCommand(const string &cmd, int clientSock) {
 
         FileMetadata meta;
         string errMsg;
-        if (!systemState.getFileMetadata(gid, fileName, meta, errMsg)) {
+        if (!systemState.getFileMetadata(gid, user, fileName, meta, errMsg)) {
             return string(PROTO_ERR) + " " + errMsg;
         }
 
